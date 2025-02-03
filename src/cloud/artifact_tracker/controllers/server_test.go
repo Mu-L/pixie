@@ -20,16 +20,16 @@ package controllers_test
 
 import (
 	"context"
-	"fmt"
-	"os"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/gogo/protobuf/types"
-	bindata "github.com/golang-migrate/migrate/source/go_bindata"
 	"github.com/googleapis/google-cloud-go-testing/storage/stiface"
-	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2/jwt"
@@ -38,94 +38,148 @@ import (
 
 	apb "px.dev/pixie/src/cloud/artifact_tracker/artifacttrackerpb"
 	"px.dev/pixie/src/cloud/artifact_tracker/controllers"
-	"px.dev/pixie/src/cloud/artifact_tracker/schema"
+	"px.dev/pixie/src/shared/artifacts/manifest"
 	vpb "px.dev/pixie/src/shared/artifacts/versionspb"
-	"px.dev/pixie/src/shared/services/pgtest"
 	"px.dev/pixie/src/utils/testingutils"
 )
-
-func TestMain(m *testing.M) {
-	err := testMain(m)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Got error: %v\n", err)
-		os.Exit(1)
-	}
-	os.Exit(0)
-}
-
-var db *sqlx.DB
-
-func testMain(m *testing.M) error {
-	s := bindata.Resource(schema.AssetNames(), schema.Asset)
-	testDB, teardown, err := pgtest.SetupTestDB(s)
-	if err != nil {
-		return fmt.Errorf("failed to start test database: %w", err)
-	}
-
-	defer teardown()
-	db = testDB
-
-	if c := m.Run(); c != 0 {
-		return fmt.Errorf("some tests failed with code: %d", c)
-	}
-	return nil
-}
 
 func mustSetupFakeBucket(t *testing.T) stiface.Client {
 	return testingutils.NewMockGCSClient(map[string]*testingutils.MockGCSBucket{
 		"test-bucket": testingutils.NewMockGCSBucket(
 			map[string]*testingutils.MockGCSObject{
 				"cli/1.2.1-pre.3/cli_linux_amd64.sha256": testingutils.NewMockGCSObject([]byte("the-sha256"), nil),
+				"cli/1.2.1-pre.3/cli_linux_amd64": testingutils.NewMockGCSObject([]byte("mybin"), &storage.ObjectAttrs{
+					MediaLink: "the-url",
+				}),
 			},
 			nil,
 		),
 	})
 }
 
-func mustLoadTestData(db *sqlx.DB) {
-	db.MustExec(`DELETE from artifact_changelogs`)
-	db.MustExec(`DELETE FROM artifacts`)
+func startTestHTTPServer(t *testing.T) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.True(t, strings.HasSuffix(r.URL.Path, ".sha256"), "unexpected http.Get to non-sha endpoint")
+		_, err := w.Write([]byte(r.URL.Path))
+		assert.NoError(t, err)
+	}))
+}
 
-	insertArtifactQuery := `
-        INSERT INTO artifacts
-          (id, artifact_name, create_time, commit_hash, version_str, available_artifacts)
-        VALUES
-          ($1, $2, $3, $4, $5, $6)`
-	db.MustExec(insertArtifactQuery, "123e4567-e89b-12d3-a456-426655440000",
-		"cli", "2019-06-22 19:10:25-07", "bda4ac2f4c979e81f5d95a2b550a08fb041e985c",
-		"1.2.3", "{LINUX_AMD64, DARWIN_AMD64}")
-	db.MustExec(insertArtifactQuery, "123e4567-e89b-12d3-a456-426655440001",
-		"cli", "2019-06-22 18:10:25-07", "ada4ac2f4c979e81f5d95a2b550a08fb041e985c",
-		"1.2.1-pre.3", "{LINUX_AMD64}")
-	db.MustExec(insertArtifactQuery, "123e4567-e89b-12d3-a456-426655440002",
-		"cli", "2019-06-21 19:10:25-07", "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
-		"1.1.5", "{LINUX_AMD64, DARWIN_AMD64}")
-
-	db.MustExec(insertArtifactQuery, "223e4567-e89b-12d3-a456-426655440000",
-		"vizier", "2019-06-21 19:10:25-07", "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
-		"1.2.0", "{CONTAINER_SET_LINUX_AMD64}")
-
-	db.MustExec(insertArtifactQuery, "223e4567-e89b-12d3-a456-426655440001",
-		"vizier", "2019-06-21 17:10:25-07", "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
-		"1.1.5", "{CONTAINER_SET_LINUX_AMD64}")
-
-	insertChangelogQuery := `
-        INSERT INTO artifact_changelogs
-          (artifacts_id, changelog)
-        VALUES
-          ($1, $2)`
-
-	db.MustExec(insertChangelogQuery, "123e4567-e89b-12d3-a456-426655440000", "cl 0")
-	db.MustExec(insertChangelogQuery, "123e4567-e89b-12d3-a456-426655440001", "cl 1")
-	db.MustExec(insertChangelogQuery, "123e4567-e89b-12d3-a456-426655440002", "cl 2")
-	db.MustExec(insertChangelogQuery, "223e4567-e89b-12d3-a456-426655440000", "cl2 0")
-	db.MustExec(insertChangelogQuery, "223e4567-e89b-12d3-a456-426655440001", "cl2 1")
+func loadTestManifest(s *controllers.Server, ts *httptest.Server) error {
+	manifestTempl := `
+  [
+    {
+      "name": "cli",
+      "artifact": [
+        {
+          "timestamp": "2019-06-22T19:10:25Z",
+          "commit_hash": "bda4ac2f4c979e81f5d95a2b550a08fb041e985c",
+          "version_str": "1.2.3",
+          "available_artifacts": [
+            "AT_LINUX_AMD64",
+            "AT_DARWIN_AMD64"
+          ],
+          "changelog": "cl 0"
+        },
+        {
+          "timestamp": "2019-06-22T19:10:25Z",
+          "commit_hash": "ada4ac2f4c979e81f5d95a2b550a08fb041e985c",
+          "version_str": "1.2.1-pre.3",
+          "available_artifacts": [
+            "AT_LINUX_AMD64"
+          ],
+          "changelog": "cl 1"
+        },
+        {
+          "timestamp": "2019-06-21T19:10:25Z",
+          "commit_hash": "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
+          "version_str": "1.1.5",
+          "available_artifacts": [
+            "AT_LINUX_AMD64",
+            "AT_DARWIN_AMD64"
+          ],
+          "changelog": "cl 2"
+        }
+      ]
+    },
+    {
+      "name": "vizier",
+      "artifact": [
+        {
+          "timestamp": "2019-06-21T19:10:25Z",
+          "commit_hash": "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
+          "version_str": "1.2.0",
+          "available_artifacts": [
+            "AT_CONTAINER_SET_LINUX_AMD64"
+          ],
+          "changelog": "cl2 0"
+        },
+        {
+          "timestamp": "2019-06-21T17:10:25Z",
+          "commit_hash": "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
+          "version_str": "1.1.5",
+          "available_artifacts": [
+            "AT_CONTAINER_SET_LINUX_AMD64"
+          ],
+          "changelog": "cl2 1"
+        },
+        {
+          "timestamp": "2018-06-21T19:10:25Z",
+          "commit_hash": "cda4ac2f4c979e81f5d95a2b550a08fb041e985c",
+          "version_str": "0.1.1",
+          "available_artifact_mirrors": [
+            {
+              "artifact_type": "AT_CONTAINER_SET_TEMPLATE_YAMLS",
+              "sha256": "abcd",
+              "urls": [
+                "{{ .ServerURL }}/vizier/0.1.1/container_template_yamls"
+              ]
+            },
+            {
+              "artifact_type": "AT_CONTAINER_SET_YAMLS",
+              "sha256": "efgh",
+              "urls": [
+                "{{ .ServerURL }}/vizier/0.1.1/container_yamls"
+              ]
+            }
+          ],
+          "changelog": "cl2 2"
+        }
+      ]
+    }
+  ]
+  `
+	t, err := template.New("").Parse(manifestTempl)
+	if err != nil {
+		return err
+	}
+	var buf strings.Builder
+	err = t.Execute(&buf, &struct {
+		ServerURL string
+	}{
+		ServerURL: ts.URL,
+	})
+	if err != nil {
+		return err
+	}
+	m, err := manifest.ReadArtifactManifest(strings.NewReader(buf.String()))
+	if err != nil {
+		return err
+	}
+	if err := s.UpdateManifest(m); err != nil {
+		return err
+	}
+	return nil
 }
 
 func TestServer_GetArtifactList(t *testing.T) {
-	mustLoadTestData(db)
+	server := controllers.NewServer(nil, "bucket", nil)
 
-	server := controllers.NewServer(db, nil, "bucket", "release-bucket", nil)
+	ts := startTestHTTPServer(t)
+	defer ts.Close()
+
+	err := loadTestManifest(server, ts)
+	require.NoError(t, err)
 
 	testCases := []struct {
 		name         string
@@ -248,13 +302,18 @@ func TestServer_GetArtifactList(t *testing.T) {
 }
 
 func TestServer_GetDownloadLink(t *testing.T) {
-	mustLoadTestData(db)
 	storageClient := mustSetupFakeBucket(t)
 
-	server := controllers.NewServer(db, storageClient, "test-bucket", "test-release", &jwt.Config{
+	server := controllers.NewServer(storageClient, "test-bucket", &jwt.Config{
 		Email:      "test@test.com",
 		PrivateKey: []byte("the-key"),
 	})
+
+	ts := startTestHTTPServer(t)
+	defer ts.Close()
+
+	err := loadTestManifest(server, ts)
+	require.NoError(t, err)
 
 	testCases := []struct {
 		name         string
@@ -308,27 +367,34 @@ func TestServer_GetDownloadLink(t *testing.T) {
 			},
 			errCode: codes.OK,
 		},
-	}
-
-	controllers.URLSigner = func(bucket, name string, opts *storage.SignedURLOptions) (string, error) {
-		return "the-url", nil
+		{
+			name: "fetch vizier container yamls (AvailableArtifactMirrors)",
+			req: apb.GetDownloadLinkRequest{
+				ArtifactName: "vizier",
+				VersionStr:   "0.1.1",
+				ArtifactType: vpb.AT_CONTAINER_SET_YAMLS,
+			},
+			expectedResp: &apb.GetDownloadLinkResponse{
+				Url:    ts.URL + "/vizier/0.1.1/container_yamls",
+				SHA256: "efgh",
+			},
+			errCode: codes.OK,
+		},
 	}
 	// Only testing error cases for now because the storage API is hard to mock.
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, err := server.GetDownloadLink(context.Background(), &tc.req)
 			if tc.errCode != codes.OK {
-				assert.Equal(t, status.Code(err), tc.errCode)
+				assert.Equal(t, tc.errCode, status.Code(err))
 				assert.Nil(t, resp)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, resp.Url, "the-url")
-
 				ts, err := types.TimestampFromProto(resp.ValidUntil)
 				require.NoError(t, err)
 				assert.True(t, time.Until(ts) > 0)
-				assert.Equal(t, resp.Url, tc.expectedResp.Url)
-				assert.Equal(t, resp.SHA256, tc.expectedResp.SHA256)
+				assert.Equal(t, tc.expectedResp.Url, resp.Url)
+				assert.Equal(t, tc.expectedResp.SHA256, resp.SHA256)
 			}
 		})
 	}

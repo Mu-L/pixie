@@ -23,11 +23,10 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"time"
 
 	"cloud.google.com/go/storage"
-	bindata "github.com/golang-migrate/migrate/source/go_bindata"
 	"github.com/googleapis/google-cloud-go-testing/storage/stiface"
-	"github.com/jmoiron/sqlx"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -38,21 +37,22 @@ import (
 	"px.dev/pixie/src/cloud/artifact_tracker/artifacttrackerenv"
 	atpb "px.dev/pixie/src/cloud/artifact_tracker/artifacttrackerpb"
 	"px.dev/pixie/src/cloud/artifact_tracker/controllers"
-	"px.dev/pixie/src/cloud/artifact_tracker/schema"
-	"px.dev/pixie/src/cloud/shared/pgmigrate"
+	"px.dev/pixie/src/shared/artifacts/manifest"
 	"px.dev/pixie/src/shared/services"
 	"px.dev/pixie/src/shared/services/healthz"
-	"px.dev/pixie/src/shared/services/pg"
 	"px.dev/pixie/src/shared/services/server"
 )
 
 func init() {
 	pflag.String("artifact_bucket", "pl-artifacts", "The name of the artifact bucket.")
-	pflag.String("release_artifact_bucket", "pl-artifacts", "The name of the artifact bucket containing official releases.")
 	pflag.String("sa_key_path", "/creds/service_account.json", "The path to the service account JSON file.")
 	pflag.String("vizier_version", "", "If specified, the db will not be queried. The only vizier version is assumed to be the one specified.")
 	pflag.String("cli_version", "", "If specified, the db will not be queried. The only CLI version is assumed to be the one specified.")
 	pflag.String("operator_version", "", "If specified, the db will not be queried. The only operator version is assumed to be the one specified.")
+	pflag.String("artifact_manifest_url", "", "The url to the artifact manifest")
+	pflag.String("artifact_manifest_sha_url", "", "The url to the sha of the artifact manifest, "+
+		"if not set the server will use the manifest url with '.sha256' appended.")
+	pflag.Duration("manifest_poll_period", 1*time.Minute, "Specify how often to poll for manifest changes")
 }
 
 func loadServiceAccountConfig() *jwt.Config {
@@ -68,17 +68,6 @@ func loadServiceAccountConfig() *jwt.Config {
 		return nil
 	}
 	return saCfg
-}
-
-func mustLoadDB() *sqlx.DB {
-	db := pg.MustConnectDefaultPostgresDB()
-
-	err := pgmigrate.PerformMigrationsUsingBindata(db, "artifacts_tracker_service_migrations",
-		bindata.Resource(schema.AssetNames(), schema.Asset))
-	if err != nil {
-		log.WithError(err).Fatal("Failed to apply migrations")
-	}
-	return db
 }
 
 func main() {
@@ -109,10 +98,26 @@ func main() {
 
 	env := artifacttrackerenv.New()
 
-	db := mustLoadDB()
 	bucket := viper.GetString("artifact_bucket")
-	releaseBucket := viper.GetString("release_artifact_bucket")
-	svr := controllers.NewServer(db, stiface.AdaptClient(client), bucket, releaseBucket, saCfg)
+	svr := controllers.NewServer(stiface.AdaptClient(client), bucket, saCfg)
+
+	// If any versions are not hardcoded, then we need to poll for the artifact manifest.
+	if (viper.GetString("vizier_version") == "") || (viper.GetString("cli_version") == "") || (viper.GetString("operator_version") == "") {
+		manifestURL := viper.GetString("artifact_manifest_url")
+		shaURL := viper.GetString("artifact_manifest_sha_url")
+		if shaURL == "" {
+			shaURL = manifestURL + ".sha256"
+		}
+		pollPeriod := viper.GetDuration("manifest_poll_period")
+		httpManifest := manifest.NewHTTPLocation(shaURL, manifestURL)
+		poller := manifest.NewPoller(httpManifest, pollPeriod, svr.UpdateManifest)
+		start := time.Now()
+		if err := poller.Start(); err != nil {
+			log.WithError(err).Fatal("failed to start manifest poller")
+		}
+		log.WithField("time elapsed", time.Since(start)).Trace("first manifest poll completed")
+		defer poller.Stop()
+	}
 
 	serverOpts := &server.GRPCServerOptions{
 		DisableAuth: map[string]bool{

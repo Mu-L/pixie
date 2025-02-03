@@ -24,12 +24,12 @@ import { PixieAPIClient } from 'app/api';
 import { isPixieEmbedded } from 'app/common/embed-context';
 import { PixieCommandIcon as ScriptIcon } from 'app/components';
 import { ParseResult, Token } from 'app/components/command-palette/parser';
-import { CommandProviderResult } from 'app/components/command-palette/providers/command-provider';
+import { CommandProviderState } from 'app/components/command-palette/providers/command-provider';
 import { SCRATCH_SCRIPT } from 'app/containers/App/scripts-context';
 import { pxTypeToEntityType } from 'app/containers/live/autocomplete-utils';
 import { GQLAutocompleteEntityKind, GQLAutocompleteFieldResult, GQLAutocompleteSuggestion } from 'app/types/schema';
 import { Script } from 'app/utils/script-bundle';
-import { highlightMatch } from 'app/utils/string-search';
+import { highlightScoredMatch, highlightNamespacedScoredMatch } from 'app/utils/string-search';
 
 import {
   CompletionDescription,
@@ -37,7 +37,6 @@ import {
   CompletionSet,
   getFieldSuggestions,
   getOnSelectSetKeyVal,
-  getStringHighlightSortFn,
   quoteIfNeeded,
 } from './script-provider-common';
 
@@ -45,10 +44,12 @@ export function getScriptIdSuggestions(partial: string, scripts: Map<string, Scr
   const scriptIds = [...scripts.keys()];
 
   const suggestions = scriptIds.map((id) => {
+    const h = highlightNamespacedScoredMatch(partial, id, '/');
     return {
       name: id,
       description: scripts.get(id).description,
-      matchedIndexes: partial && id !== SCRATCH_SCRIPT.id ? highlightMatch(partial, id) : [],
+      matchedIndexes: partial && id !== SCRATCH_SCRIPT.id ? h.highlights : [],
+      score: h.distance,
     };
   }).filter((s) => {
     if (s.name === SCRATCH_SCRIPT.id) return !isPixieEmbedded();
@@ -59,18 +60,15 @@ export function getScriptIdSuggestions(partial: string, scripts: Map<string, Scr
    * Sort by the following proirities (first non-tie decides the order of two suggestions):
    * - Scratch script always goes first
    * - px/* scripts go before other namespaces
-   * - Matching more of the input string is better than less
-   * - Fewer gaps between matched characters is better than more
-   * - If there's still a tie, sort alphabetically
+   * - Otherwise, the quality of the match is used (perfect match is better than substring is better than typo is...)
    *
    * Example: if partial is `service_e`, matches would be sorted like this:
    * [Scratch Pad, px/service_edge_stats, px/service_resource_usage, pxbeta/service_endpoint, pxbeta/service_endpoints]
    */
-  const sort = getStringHighlightSortFn(partial);
   suggestions.sort((a, b) => {
     const isScratchDistance = Number(b.name === SCRATCH_SCRIPT.id) - Number(a.name === SCRATCH_SCRIPT.id);
     const namespaceDistance = Number(b.name.startsWith('px/')) - Number(a.name.startsWith('px/'));
-    const relevanceDistance = sort(a.name, a.matchedIndexes, b.name, b.matchedIndexes);
+    const relevanceDistance = a.score - b.score; // Lower scores are closer matches
 
     // Combine the scores by priority to sort
     return (isScratchDistance * 1e3)
@@ -79,8 +77,8 @@ export function getScriptIdSuggestions(partial: string, scripts: Map<string, Scr
   });
 
   return {
-    suggestions: suggestions.slice(0, 5),
-    hasAdditionalMatches: suggestions.length > 5,
+    suggestions: suggestions.slice(0, 25),
+    hasAdditionalMatches: suggestions.length > 25,
   };
 }
 
@@ -95,13 +93,16 @@ export function getFullScriptSuggestions(
   partial: string,
   scripts: Map<string, Script>,
   focusArg?: string,
-): CommandProviderResult {
+): CommandProviderState {
   const idSuggestions = getScriptIdSuggestions(partial, scripts);
   return {
-    providerName: 'Scripts',
+    input: partial,
+    selection: [0, 0],
+    providerName: 'getFullScriptSuggestions',
+    loading: false,
     completions: idSuggestions.suggestions.map(({ name, description, matchedIndexes }, i) => {
       return {
-        heading: 'PxL Scripts',
+        heading: 'Scripts',
         key: `pxl_${name}_${i}`,
         // eslint-disable-next-line react-memo/require-usememo
         label: <CompletionLabel icon={<ScriptIcon />} input={name} highlights={matchedIndexes} />,
@@ -210,13 +211,16 @@ export async function getScriptArgSuggestions(
   const completions = [];
   // Look only at args that match the input, and pre-sort them by relevance
   const argsMatchedOnName = script.vis.variables
-    .map((arg) => ({
-      ...arg,
-      highlights: highlightMatch(partial, arg.name),
-    }))
+    .map((arg) => {
+      const h = highlightScoredMatch(partial, arg.name);
+      return {
+        ...arg,
+        highlights: h.highlights,
+        score: h.distance,
+      };
+    })
     .filter((a) => !partial.length || a.highlights.length > 0);
-  const sort = getStringHighlightSortFn(partial);
-  argsMatchedOnName.sort((a, b) => sort(a.name, a.highlights, b.name, b.highlights));
+  argsMatchedOnName.sort((a, b) => b.score - a.score);
 
   for (const arg of argsMatchedOnName) {
     if (!parsed.kvMap.has(arg.name)) {
@@ -265,8 +269,8 @@ export async function getScriptArgSuggestions(
   }
 
   return {
-    completions: completions.slice(0, 5),
-    hasAdditionalMatches: completions.length > 5,
+    completions: completions.slice(0, 25),
+    hasAdditionalMatches: completions.length > 25,
   };
 }
 
@@ -282,31 +286,30 @@ export function getScriptArgValueSuggestions(
   selectedToken: Token,
   script: Script,
 ): CompletionSet {
-  const partial = selectedToken.text.trim();
+  const partial = selectedToken?.type === 'value' ? selectedToken?.text.trim() ?? '' : '';
   const completions = [];
 
-  const keyToken = [selectedToken, selectedToken.relatedToken].find(t => t?.type === 'key') ?? null;
+  const keyToken = [selectedToken, selectedToken?.relatedToken].find(t => t?.type === 'key') ?? null;
   const checkKey = keyToken?.value ?? '';
 
   const arg = script.vis.variables.find(v => checkKey.length > 0 && v.name === checkKey);
   if (arg) {
     // Note: this function _doesn't_ check for entities, because getScriptArgSuggestions and suggestFromBare already do.
     const values = (arg.validValues?.length ? arg.validValues : [partial])
-      .map(v => ({ value: v, highlights: highlightMatch(partial, v) }));
+      .map(v => ({ value: v, highlights: highlightScoredMatch(partial, v) }));
 
-    const sort = getStringHighlightSortFn(partial);
-    values.sort((a, b) => sort(a.value, a.highlights, b.value, b.highlights));
+    values.sort((a, b) => a.highlights.distance - b.highlights.distance);
 
-    completions.push(...values.map(v => ({
-      heading: arg.name,
-      key: arg.name,
+    completions.push(...values.map((v, i) => ({
+      heading: `Valid values for "${arg.name}"`,
+      key: String(i),
       description: arg.description,
       label: (
         <CompletionLabel
-          input={`${arg.name}:${v}`}
+          input={v.value}
           // eslint-disable-next-line react-memo/require-usememo
           icon={<ArgIcon />}
-          highlights={v.highlights}
+          highlights={v.highlights.highlights}
         />
       ),
       onSelect: getOnSelectSetKeyVal(parsed, selectedToken, arg.name, v.value),
@@ -314,7 +317,7 @@ export function getScriptArgValueSuggestions(
   }
 
   return {
-    completions: completions.slice(0, 5),
-    hasAdditionalMatches: completions.length > 5,
+    completions: completions.slice(0, 25),
+    hasAdditionalMatches: completions.length > 25,
   };
 }

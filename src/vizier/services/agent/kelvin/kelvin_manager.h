@@ -22,7 +22,8 @@
 #include <string>
 #include <utility>
 
-#include "src/vizier/services/agent/manager/manager.h"
+#include "src/common/system/kernel_version.h"
+#include "src/vizier/services/agent/shared/manager/manager.h"
 
 namespace px {
 namespace vizier {
@@ -33,7 +34,7 @@ class KelvinManager : public Manager {
   template <typename... Args>
   static StatusOr<std::unique_ptr<Manager>> Create(Args&&... args) {
     auto m = std::unique_ptr<KelvinManager>(new KelvinManager(std::forward<Args>(args)...));
-    PL_RETURN_IF_ERROR(m->Init());
+    PX_RETURN_IF_ERROR(m->Init());
     return std::unique_ptr<Manager>(std::move(m));
   }
 
@@ -43,9 +44,9 @@ class KelvinManager : public Manager {
   KelvinManager() = delete;
   KelvinManager(sole::uuid agent_id, std::string_view pod_name, std::string_view host_ip,
                 std::string_view addr, int grpc_server_port, std::string_view nats_url,
-                std::string_view mds_url)
+                std::string_view mds_url, system::KernelInfo kernel_info)
       : Manager(agent_id, pod_name, host_ip, grpc_server_port, KelvinManager::Capabilities(),
-                nats_url, mds_url) {
+                KelvinManager::Parameters(), nats_url, mds_url, kernel_info) {
     info()->address = std::string(addr);
   }
 
@@ -60,6 +61,12 @@ class KelvinManager : public Manager {
     services::shared::agent::AgentCapabilities capabilities;
     capabilities.set_collects_data(false);
     return capabilities;
+  }
+
+  static services::shared::agent::AgentParameters Parameters() {
+    services::shared::agent::AgentParameters parameters;
+    parameters.set_profiler_stack_trace_sample_period_ms(-1);
+    return parameters;
   }
 };
 

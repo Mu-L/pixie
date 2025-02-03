@@ -19,15 +19,16 @@ spec:
     spec:
       initContainers:
       - name: wait-for-publisher
-        image: gcr.io/pixie-oss/pixie-dev-public/curl:1.0
-        # yamllint disable rule:indentation rule:line-length
+        # yamllint disable-line rule:line-length
+        image: ghcr.io/pixie-io/pixie-oss-pixie-dev-public-curl:multiarch-7.87.0@sha256:f7f265d5c64eb4463a43a99b6bf773f9e61a50aaa7cefaf564f43e42549a01dd
+        # yamllint disable rule:line-length
         command: ['sh', '-c', 'set -xe;
           URL="http://jetstream-publisher.${NS}.svc.cluster.local:8080/metrics";
           until [ $(curl -m 0.5 -s -o /dev/null -w "%{http_code}" ${URL}) -eq 200 ]; do
             echo "waiting for ${URL}";
             sleep 2;
           done;']
-        # yamllint enable rule:indentation rule:line-length
+        # yamllint enable rule:line-length
         env:
         - name: NS
           valueFrom:
@@ -35,7 +36,7 @@ spec:
               fieldPath: metadata.namespace
       containers:
       - name: app
-        image: gcr.io/pixie-oss/pixie-dev/src/e2e_test/jetstream_loadtest/subscriber_image:latest
+        image: jetstream_loadtest-subscriber_image:latest
         ports:
         - containerPort: 8080
           name: metrics

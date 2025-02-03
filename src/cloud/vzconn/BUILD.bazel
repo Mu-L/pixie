@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary", "pl_go_image")
 
@@ -26,6 +25,7 @@ go_library(
     importpath = "px.dev/pixie/src/cloud/vzconn",
     visibility = ["//visibility:private"],
     deps = [
+        "//src/cloud/shared/messages",
         "//src/cloud/vzconn/bridge",
         "//src/cloud/vzconn/vzconnpb:service_pl_go_proto",
         "//src/cloud/vzmgr/vzmgrpb:service_pl_go_proto",
@@ -36,11 +36,10 @@ go_library(
         "//src/shared/services/msgbus",
         "//src/shared/services/server",
         "@com_github_nats_io_nats_go//:nats_go",
-        "@com_github_prometheus_client_golang//prometheus",
         "@com_github_sirupsen_logrus//:logrus",
         "@com_github_spf13_pflag//:pflag",
         "@com_github_spf13_viper//:viper",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 
@@ -57,13 +56,4 @@ pl_go_image(
         "//k8s:__subpackages__",
         "//src/cloud:__subpackages__",
     ],
-)
-
-container_push(
-    name = "push_vzconn_server_image",
-    format = "Docker",
-    image = ":vzconn_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/cloud/vzconn_server_image",
-    tag = "{STABLE_BUILD_TAG}",
 )

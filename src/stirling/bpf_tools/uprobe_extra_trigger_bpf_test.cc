@@ -21,7 +21,8 @@
 #include "src/common/testing/testing.h"
 #include "src/stirling/bpf_tools/bcc_wrapper.h"
 #include "src/stirling/bpf_tools/macros.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/go_1_19_grpc_client_container.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/go_1_19_grpc_server_container.h"
 
 namespace px {
 namespace stirling {
@@ -49,14 +50,15 @@ constexpr char kBCCProgram[] = R"(
 // It is not enough to resolve symlinks, because the two paths may come from two
 // instances of the same container image, which appear to be separate paths,
 // but which have share the same file inode behind the scenes.
-TEST(BCCWrapper, UnexpectedExtraTrigger) {
-  BCCWrapper bcc_wrapper;
+// Disabling this test since this bug doesn't seem to reproduce with podman.
+TEST(BCCWrapper, DISABLED_UnexpectedExtraTrigger) {
+  BCCWrapperImpl bcc_wrapper;
   ASSERT_OK(bcc_wrapper.InitBPFProgram(kBCCProgram));
 
-  ::px::stirling::testing::Go1_16_GRPCServerContainer server1;
-  ::px::stirling::testing::Go1_16_GRPCServerContainer server2;
-  ::px::stirling::testing::Go1_16_GRPCClientContainer client1;
-  ::px::stirling::testing::Go1_16_GRPCClientContainer client2;
+  ::px::stirling::testing::Go1_19_GRPCServerContainer server1;
+  ::px::stirling::testing::Go1_19_GRPCServerContainer server2;
+  ::px::stirling::testing::Go1_19_GRPCClientContainer client1;
+  ::px::stirling::testing::Go1_19_GRPCClientContainer client2;
 
   // A Uprobe template for the GRPCServerContainer.
   // Binary path is set later.
@@ -68,7 +70,7 @@ TEST(BCCWrapper, UnexpectedExtraTrigger) {
   };
 
   // A templated path to the server. We will replace $0 with the pid of the server instance.
-  const std::string kServerPath = "/proc/$0/root/golang_1_16_grpc_tls_server_binary";
+  const std::string kServerPath = "/proc/$0/root/golang_1_19_grpc_tls_server_binary";
 
   // Run server 1 and attach uprobes to it.
   ASSERT_OK(server1.Run(std::chrono::seconds{60}));
@@ -81,8 +83,8 @@ TEST(BCCWrapper, UnexpectedExtraTrigger) {
   client1.Wait();
 
   // We expect the probe to be triggered once, and it is.
-  int trigger_count1;
-  bcc_wrapper.GetArrayTable<int>("count").get_value(0, trigger_count1);
+  auto counts = WrappedBCCArrayTable<int>::Create(&bcc_wrapper, "count");
+  ASSERT_OK_AND_ASSIGN(const int trigger_count1, counts->GetValue(0));
   ASSERT_EQ(trigger_count1, 1);
 
   // Now spawn a second server in a separate container, and attach a uprobe to it.
@@ -97,8 +99,7 @@ TEST(BCCWrapper, UnexpectedExtraTrigger) {
   client2.Wait();
 
   // We expect the probe to be triggered one additional time, but it's actually triggered twice.
-  int trigger_count2;
-  bcc_wrapper.GetArrayTable<int>("count").get_value(0, trigger_count2);
+  ASSERT_OK_AND_ASSIGN(const int trigger_count2, counts->GetValue(0));
   ASSERT_EQ(trigger_count2, 3);
 
   // Why does this happen?

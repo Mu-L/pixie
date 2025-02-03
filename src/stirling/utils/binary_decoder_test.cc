@@ -19,6 +19,8 @@
 #include "src/stirling/utils/binary_decoder.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -40,15 +42,68 @@ TEST(BinaryDecoderTest, ExtractChar) {
   EXPECT_EQ(0, bin_decoder.BufSize());
 }
 
-TEST(BinaryDecoderTest, ExtractInt) {
+TEST(BinaryDecoderTest, ExtractBEInt) {
   std::string_view data("\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01");
   BinaryDecoder bin_decoder(data);
 
-  ASSERT_OK_AND_EQ(bin_decoder.ExtractInt<int8_t>(), 1);
-  ASSERT_OK_AND_EQ(bin_decoder.ExtractInt<int16_t>(), 257);
-  ASSERT_OK_AND_EQ(bin_decoder.ExtractInt<int24_t>(), 65793);
-  ASSERT_OK_AND_EQ(bin_decoder.ExtractInt<int32_t>(), 16843009);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractBEInt<int8_t>(), 1);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractBEInt<int16_t>(), 257);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractBEInt<int24_t>(), 65793);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractBEInt<int32_t>(), 16843009);
   EXPECT_EQ(0, bin_decoder.BufSize());
+}
+
+TEST(BinaryDecoderTest, ExtractLEInt) {
+  std::string_view data("\x10\x10\x01\x10\x01\x01\x10\x01\x01\x01");
+  BinaryDecoder bin_decoder(data);
+
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractLEInt<int8_t>(), 16);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractLEInt<int16_t>(), 272);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractLEInt<int24_t>(), 65808);
+  ASSERT_OK_AND_EQ(bin_decoder.ExtractLEInt<int32_t>(), 16843024);
+  EXPECT_EQ(0, bin_decoder.BufSize());
+}
+
+TEST(BinaryDecoderTest, ExtractUVarInt) {
+  std::vector<std::pair<std::vector<uint8_t>, uint64_t>> uVarInts = {
+      {{}, 0},
+      {{0x01}, 1},
+      {{0x02}, 2},
+      {{0x7f}, 127},
+      {{0x80, 0x01}, 128},
+      {{0xff, 0x01}, 255},
+      {{0x80, 0x02}, 256},
+      {{0x80, 0x80, 0x02}, 32768},
+      {{0x80, 0x80, 0x80, 0x02}, 4194304},
+      {{0x80, 0x80, 0x80, 0x80, 0x02}, 536870912},
+      {{0x80, 0x80, 0x80, 0x80, 0x80, 0x02}, 68719476736},
+      {{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02}, 8796093022208},
+      {{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02}, 1125899906842624},
+      {{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02}, 144115188075855872},
+      {{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00}, 0},
+      {{0xd7, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}, 18446744073709551575UL},
+  };
+  for (auto& p : uVarInts) {
+    auto data = p.first;
+    std::string_view s(reinterpret_cast<char*>(data.data()), data.size());
+    BinaryDecoder bin_decoder(s);
+    ASSERT_OK_AND_EQ(bin_decoder.ExtractUVarInt(), p.second);
+    EXPECT_EQ(0, bin_decoder.BufSize());
+  }
+}
+
+TEST(BinaryDecoderTest, ExtractUVarIntOverflow) {
+  std::vector<std::vector<uint8_t>> uVarInts = {
+      {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02},
+      {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02},
+      {0xd7, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01},
+      {0xd7, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+  };
+  for (auto& data : uVarInts) {
+    std::string_view s(reinterpret_cast<char*>(data.data()), data.size());
+    BinaryDecoder bin_decoder(s);
+    EXPECT_NOT_OK(bin_decoder.ExtractUVarInt());
+  }
 }
 
 TEST(BinaryDecoderTest, ExtractString) {

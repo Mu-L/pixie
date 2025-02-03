@@ -45,8 +45,8 @@ class StirlingBPFTest : public ::testing::Test {
 
   Status AppendData(uint64_t table_id, types::TabletID tablet_id,
                     std::unique_ptr<types::ColumnWrapperRecordBatch> record_batch) {
-    PL_UNUSED(table_id);
-    PL_UNUSED(tablet_id);
+    PX_UNUSED(table_id);
+    PX_UNUSED(tablet_id);
     record_batches_.push_back(std::move(record_batch));
     return Status::OK();
   }
@@ -68,16 +68,16 @@ TEST_F(StirlingBPFTest, CleanupTest) {
   // Wait for thread to initialize.
   ASSERT_OK(stirling_->WaitUntilRunning(/* timeout */ std::chrono::seconds(5)));
 
-  EXPECT_GT(SocketTraceConnector::num_attached_probes(), 0);
-  EXPECT_GT(SocketTraceConnector::num_open_perf_buffers(), 0);
+  EXPECT_GT(bpf_tools::BCCWrapper::num_attached_probes(), 0);
+  EXPECT_GT(bpf_tools::BCCWrapper::num_open_perf_buffers(), 0);
 
   std::thread killer_thread = std::thread(&AsyncKill, stirling_.get());
 
   ASSERT_TRUE(killer_thread.joinable());
   killer_thread.join();
 
-  EXPECT_EQ(SocketTraceConnector::num_attached_probes(), 0);
-  EXPECT_EQ(SocketTraceConnector::num_open_perf_buffers(), 0);
+  EXPECT_EQ(bpf_tools::BCCWrapper::num_attached_probes(), 0);
+  EXPECT_EQ(bpf_tools::BCCWrapper::num_open_perf_buffers(), 0);
 }
 
 }  // namespace stirling

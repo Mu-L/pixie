@@ -18,9 +18,16 @@
 
 import * as React from 'react';
 
+import { useQuery, gql } from '@apollo/client';
 import {
-  Help as HelpIcon,
+  AccountTree as OrgIcon,
   Campaign as CampaignIcon,
+  Extension as PluginIcon,
+  Group as UsersIcon,
+  Help as HelpIcon,
+  Person as UserIcon,
+  Send as InviteIcon,
+  VpnKey as KeyIcon,
 } from '@mui/icons-material';
 import {
   Divider,
@@ -34,21 +41,25 @@ import {
 import { Theme } from '@mui/material/styles';
 import { createStyles, makeStyles } from '@mui/styles';
 import AnnounceKit from 'announcekit-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { ClusterContext } from 'app/common/cluster-context';
+import { isPixieEmbedded } from 'app/common/embed-context';
 import UserContext from 'app/common/user-context';
-import {
-  ClusterIcon, DataDisksIcon, DocsIcon, NamespaceIcon,
-} from 'app/components';
-import { LiveRouteContext } from 'app/containers/App/live-routing';
+import { buildClass, ClusterIcon, DataDisksIcon, DocsIcon, NamespaceIcon } from 'app/components';
 import {
   DOMAIN_NAME, ANNOUNCEMENT_ENABLED,
   ANNOUNCE_WIDGET_URL,
 } from 'app/containers/constants';
 import { deepLinkURLFromScript } from 'app/containers/live-widgets/utils/live-view-params';
+import { ScriptContext } from 'app/context/script-context';
+import { GetOAuthProvider } from 'app/pages/auth/utils';
+import { GQLClusterInfo } from 'app/types/schema';
 import { showIntercomTrigger, triggerID } from 'app/utils/intercom';
 import { SidebarFooter } from 'configurable/sidebar-footer';
+
+import { selectClusterName } from './cluster-info';
+import { LiveRouteContext } from './live-routing';
 
 const useStyles = makeStyles(({
   spacing,
@@ -114,8 +125,27 @@ const useStyles = makeStyles(({
       overflow: 'hidden',
     },
   },
+  activeListIcon: {
+    position: 'relative',
+    '&:after': {
+      position: 'absolute',
+      content: '""',
+      pointerEvents: 'none',
+      fontSize: '0.01px',
+      height: '100%',
+      top: 0,
+      right: 0,
+      borderRight: `${spacing(0.25)} ${palette.primary.main} solid`,
+    },
+    '&$listIcon > div': {
+      color: palette.primary.main,
+    },
+  },
   clippedItem: {
     height: spacing(6),
+  },
+  divider: {
+    borderColor: palette.background.five,
   },
   sidebarToggle: {
     position: 'absolute',
@@ -130,19 +160,26 @@ const useStyles = makeStyles(({
   },
 }), { name: 'SideBar' });
 
-interface LinkItemProps {
+export interface LinkItemProps {
   icon: React.ReactNode;
   link: string;
   text: string;
+  active?: boolean;
 }
 
 const SideBarInternalLinkItem = React.memo<LinkItemProps>(({
-  icon, link, text,
+  icon, link, text, active,
 }) => {
   const classes = useStyles();
   return (
     <Tooltip title={text} disableInteractive>
-      <ListItem button component={Link} to={link} key={text} className={classes.listIcon}>
+      <ListItem
+        button
+        component={Link}
+        to={link}
+        key={text}
+        className={buildClass(classes.listIcon, active && classes.activeListIcon)}
+      >
         <ListItemIcon>{icon}</ListItemIcon>
         <ListItemText primary={text} />
       </ListItem>
@@ -166,39 +203,134 @@ const SideBarExternalLinkItem = React.memo<LinkItemProps>(({
 });
 SideBarExternalLinkItem.displayName = 'SideBarExternalLinkItem';
 
-export const SideBar: React.FC<{ open: boolean }> = React.memo(({ open }) => {
-  const classes = useStyles();
+type ClusterRowInfo = Pick<GQLClusterInfo, 'id' | 'clusterName' | 'status'>;
+
+const useSelectedOrDefaultClusterName = () => {
+  const { data } = useQuery<{
+    clusters: ClusterRowInfo[]
+  }>(
+    gql`
+      query listClustersForSidebar {
+        clusters {
+          id
+          clusterName
+          status
+        }
+      }
+    `,
+    { pollInterval: 60000, fetchPolicy: 'cache-and-network' },
+  );
+
+  const [clusters, setClusters] = React.useState<ClusterRowInfo[]>([]);
+  React.useEffect(() => {
+    if (data?.clusters) {
+      setClusters(data.clusters);
+    }
+  }, [data?.clusters]);
+
+
+  const defaultClusterName = selectClusterName(clusters ?? []) ?? '';
   const selectedClusterName = React.useContext(ClusterContext)?.selectedClusterName ?? '';
 
-  // If we're not in the live view, LiveViewContext is null.
-  const embedState = React.useContext(LiveRouteContext)?.embedState ?? null;
+  return selectedClusterName || defaultClusterName;
+};
+
+export const SideBar: React.FC<{ open: boolean, buttons?: LinkItemProps[] }> = React.memo(({ open, buttons = [] }) => {
+  const classes = useStyles();
+
+  // Most sidebar items need some state or are conditional, so here are all of the contexts they need at once.
+  const selectedClusterName = useSelectedOrDefaultClusterName();
+  const embedState = React.useContext(LiveRouteContext)?.embedState;
+  const authClient = React.useMemo(() => GetOAuthProvider(), []);
+  const showInvitations = authClient.isInvitationEnabled();
+  const scriptId = React.useContext(ScriptContext)?.script?.id;
+  const { pathname } = useLocation();
+
+  const isEmbedded = isPixieEmbedded();
+  const defaultEmbedState = React.useMemo(() => ({
+    isEmbedded,
+    disableTimePicker: false,
+    widget: null,
+  }), [isEmbedded]);
 
   const { user } = React.useContext(UserContext);
 
-  const navItems = React.useMemo(() => {
-    if (!selectedClusterName || !embedState) {
+  const liveItems: LinkItemProps[] = React.useMemo(() => {
+    if (!selectedClusterName) {
       return [];
     }
-    return [{
+    return [
+      {
+        icon: <ClusterIcon />,
+        link: deepLinkURLFromScript('px/cluster', selectedClusterName, embedState ?? defaultEmbedState, {}),
+        text: 'Cluster',
+        active: scriptId === 'px/cluster',
+      },
+      {
+        icon: <NamespaceIcon />,
+        link: deepLinkURLFromScript('px/namespaces', selectedClusterName, embedState ?? defaultEmbedState, {}),
+        text: 'Namespaces',
+        active: scriptId === 'px/namespaces',
+      },
+    ];
+  }, [defaultEmbedState, embedState, scriptId, selectedClusterName]);
+
+  const allowAdmin = React.useMemo(() => !pathname.includes('/live'), [pathname]);
+  const adminItems: LinkItemProps[] = React.useMemo(() => allowAdmin ? [
+    {
       icon: <ClusterIcon />,
-      link: deepLinkURLFromScript('px/cluster', selectedClusterName, embedState, {}),
-      text: 'Cluster',
+      link: '/admin/clusters',
+      text: 'Clusters',
+      active: pathname.endsWith('/admin/clusters'),
     },
     {
-      icon: <NamespaceIcon />,
-      link: deepLinkURLFromScript('px/namespaces', selectedClusterName, embedState, {}),
-      text: 'Namespaces',
-    }];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClusterName, embedState]);
+      icon: <KeyIcon />,
+      link: '/admin/keys/api',
+      text: 'Keys',
+      active: pathname.includes('/admin/keys'),
+    },
+    {
+      icon: <PluginIcon />,
+      link: '/admin/plugins',
+      text: 'Plugins',
+      active: pathname.endsWith('/admin/plugins'),
+    },
+    {
+      icon: <UsersIcon />,
+      link: '/admin/users',
+      text: 'Users',
+      active: pathname.endsWith('/admin/users'),
+    },
+    {
+      icon: <OrgIcon />,
+      link: '/admin/org',
+      text: 'Org Settings',
+      active: pathname.endsWith('/admin/org'),
+    },
+    {
+      icon: <UserIcon />,
+      link: '/admin/user',
+      text: 'User Settings',
+      active: pathname.endsWith('/admin/user'),
+    },
+    ...(showInvitations ? [{
+      icon: <InviteIcon />,
+      link: '/admin/invite',
+      text: 'Invitations',
+      active: pathname.endsWith('/admin/invite'),
+    }] : []),
+  ] : [], [pathname, allowAdmin, showInvitations]);
 
-  const pluginItems = React.useMemo(() => {
-    return [{
+  const pluginItems = React.useMemo(() => [
+    {
       icon: <DataDisksIcon />,
       link: '/configure-data-export',
       text: 'Data Retention',
-    }];
-  }, []);
+      active: pathname.includes('/configure-data-export'),
+    },
+  ], [pathname]);
+
+  const groupedItems = [liveItems, adminItems, pluginItems, buttons].filter(g => g?.length > 0);
 
   const drawerClasses = React.useMemo(
     () => ({ paper: open ? classes.drawerOpen : classes.drawerClose }),
@@ -220,35 +352,30 @@ export const SideBar: React.FC<{ open: boolean }> = React.memo(({ open }) => {
         <List>
           <ListItem button className={classes.clippedItem} />
         </List>
-        {navItems.length > 0 && (
-          <List>
-            {navItems.map(({ icon, link, text }) => (
-              <SideBarInternalLinkItem key={text} icon={icon} link={link} text={text} />
+        {groupedItems.map((g, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && (<Divider variant='middle' className={classes.divider} />)}
+            {g.map((props) => (
+              <SideBarInternalLinkItem key={props.text} {...props} />
             ))}
-          </List>
-        )}
-        { navItems.length > 0 && <Divider variant='middle' />}
-        <List>
-          {pluginItems.map(({ icon, link, text }) => (
-            <SideBarInternalLinkItem key={text} icon={icon} link={link} text={text} />
-          ))}
-        </List>
+          </React.Fragment>
+        ))}
         <div className={classes.spacer} />
         <List>
-          <Tooltip title='Announcements' disableInteractive>
-            <div className={classes.announcekit}>
-              {
-                ANNOUNCEMENT_ENABLED && (
-                <AnnounceKit widget={ANNOUNCE_WIDGET_URL} user={announceUser} data={announceData}>
-                  <ListItem button key='announcements' className={classes.listIcon}>
-                    <ListItemIcon><CampaignIcon /></ListItemIcon>
-                    <ListItemText primary='Announcements' />
-                  </ListItem>
-                </AnnounceKit>
-                )
-              }
-            </div>
-          </Tooltip>
+          {
+            ANNOUNCEMENT_ENABLED && (
+              <Tooltip title='Announcements' disableInteractive>
+                <div className={classes.announcekit}>
+                    <AnnounceKit widget={ANNOUNCE_WIDGET_URL} user={announceUser} data={announceData}>
+                      <ListItem button key='announcements' className={classes.listIcon}>
+                        <ListItemIcon><CampaignIcon /></ListItemIcon>
+                        <ListItemText primary='Announcements' />
+                      </ListItem>
+                    </AnnounceKit>
+                </div>
+              </Tooltip>
+            )
+          }
           <SideBarExternalLinkItem
             key='Docs'
             icon={React.useMemo(() => <DocsIcon />, [])}

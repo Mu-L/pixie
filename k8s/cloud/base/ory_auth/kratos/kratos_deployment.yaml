@@ -17,6 +17,11 @@ spec:
       labels:
         name: kratos
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10100
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
       - name: migrate
         args:
@@ -44,8 +49,17 @@ spec:
           # yamllint disable-line rule:line-length
           value: postgres://$(PL_POSTGRES_USERNAME):$(PL_POSTGRES_PASSWORD)@$(PL_POSTGRES_HOSTNAME):$(PL_POSTGRES_PORT)/$(PL_POSTGRES_DB)?sslmode=disable&max_conns=20&max_idle_conns=4
         imagePullPolicy: IfNotPresent
-        image: oryd/kratos:v0.10.1
+        image: oryd/kratos:v0.10.1@sha256:fdcfac3da3b64e619af553451607e1ab00160e59860bb19ec145cdc6f6f9c41d
         resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
         volumeMounts:
         - mountPath: /etc/config/kratos
           name: config
@@ -121,7 +135,7 @@ spec:
         - name: SELFSERVICE_FLOWS_ERROR_UI_URL
           value: https://$(PL_WORK_DOMAIN)/auth/password/error
         imagePullPolicy: IfNotPresent
-        image: oryd/kratos:v0.10.1
+        image: oryd/kratos:v0.10.1@sha256:fdcfac3da3b64e619af553451607e1ab00160e59860bb19ec145cdc6f6f9c41d
         ports:
         - containerPort: 4433
         - containerPort: 4434
@@ -131,17 +145,26 @@ spec:
           name: config
         - name: certs
           mountPath: /certs
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
       - name: admin-create-if-not-exists
         imagePullPolicy: IfNotPresent
-        image: gcr.io/pixie-oss/pixie-dev-public/curl:1.0
-        # yamllint disable rule:indentation
+        # yamllint disable-line rule:line-length
+        image: ghcr.io/pixie-io/pixie-oss-pixie-dev-public-curl:multiarch-7.87.0@sha256:f7f265d5c64eb4463a43a99b6bf773f9e61a50aaa7cefaf564f43e42549a01dd
         command: ['sh', '-c', 'set -x;
           URL="${ADMIN_URL}/admin/health/ready";
-          until [ $(curl -m 0.5 -s -o /dev/null -w "%{http_code}" --cacert /certs/ca.crt ${URL}) -eq 200 ]; do
+          until [ $(curl -k -m 0.5 -s -o /dev/null -w "%{http_code}" ${URL}) -eq 200 ]; do
             echo "waiting for ${URL}";
             sleep 2;
           done;
-          curl --cacert /certs/ca.crt -s -H "Content-Type: application/json"
+          curl -k -s -H "Content-Type: application/json"
             --data "${ADMIN_IDENTITY}" "${ADMIN_URL}/admin/identities";
           sleep infinity;
         ']
@@ -168,6 +191,15 @@ spec:
           name: config
         - name: certs
           mountPath: /certs
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
       restartPolicy: Always
       serviceAccountName: ""
       volumes:

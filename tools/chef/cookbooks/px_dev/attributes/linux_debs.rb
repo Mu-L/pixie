@@ -18,26 +18,8 @@ if ! platform_family?('debian')
   return
 end
 
-default['clang']['version']    = '15.0-pl2'
-default['clang']['deb']        =
-  "https://storage.googleapis.com/pixie-dev-public/clang/#{default['clang']['version']}/clang-#{default['clang']['version']}.deb"
-default['clang']['deb_sha256'] =
-  '32549362100f3759a0b50b3e1993f58086568696839bbdd88c11602bd3e994e2'
-
-default['clang-linters']['version']    = '15.0-pl7'
+default['clang-linters']['version']    = '15.0-pl12'
 default['clang-linters']['deb']        =
-  "https://storage.googleapis.com/pixie-dev-public/clang/#{default['clang-linters']['version']}/clang-linters-#{default['clang-linters']['version']}.deb"
+  "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F#{default['clang-linters']['version']}/clang-linters-#{default['clang-linters']['version']}.deb"
 default['clang-linters']['deb_sha256'] =
-  'b17b42694e1edf408a31d68ba04b33708e6c3fb2fbcbd8749697f3ca10996916'
-
-default['gcc-musl']['version'] = '11.2.0'
-default['gcc-musl']['deb'] =
-  "https://storage.googleapis.com/pixie-dev-public/gcc-musl-libs-#{default['gcc-musl']['version']}.deb"
-default['gcc-musl']['deb_sha256'] =
-  'ba52df92bce02f3c2bc53604466e0fac8844f941ae6d2d44061e48403f5752fb'
-
-default['gperftools']['version']    = '2.7-pl2'
-default['gperftools']['deb']        =
-  "https://storage.googleapis.com/pixie-dev-public/gperftools-pixie-#{default['gperftools']['version']}.deb"
-default['gperftools']['deb_sha256'] =
-  '10f00d6ddde920c74c80eb966362fa234c1d97349ba186b51d05bb98e3fff72e'
+  'f264b9aa1afab52d732282a0e2177d8a372cefc71d791fd45e6e2e4df4e8ac43'

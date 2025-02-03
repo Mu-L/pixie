@@ -189,7 +189,7 @@ TEST_F(ConnTrackerTest, ReqRespMatchingSerializedMissingRequest) {
   tracker.AddControlEvent(conn);
   tracker.AddDataEvent(std::move(req0));
   tracker.AddDataEvent(std::move(resp0));
-  PL_UNUSED(req1);  // Missing event.
+  PX_UNUSED(req1);  // Missing event.
   tracker.AddDataEvent(std::move(resp1));
   tracker.AddDataEvent(std::move(req2));
   tracker.AddDataEvent(std::move(resp2));
@@ -222,7 +222,7 @@ TEST_F(ConnTrackerTest, ReqRespMatchingSerializedMissingResponse) {
   tracker.AddDataEvent(std::move(req0));
   tracker.AddDataEvent(std::move(resp0));
   tracker.AddDataEvent(std::move(req1));
-  PL_UNUSED(req2);  // Missing event.
+  PX_UNUSED(req2);  // Missing event.
   tracker.AddDataEvent(std::move(req2));
   tracker.AddDataEvent(std::move(resp2));
   tracker.AddControlEvent(close_event);
@@ -375,7 +375,7 @@ TEST_F(ConnTrackerTest, MemUsage) {
   auto frame1 = event_gen_.InitSendEvent<kProtocolHTTP>(kHTTPResp0);
 
   ConnTracker tracker;
-  tracker.InitFrames<http::Message>();
+  tracker.InitFrames<http::stream_id_t, http::Message>();
 
   // Initial memory use is not 0, because the DataStreamBuffer has a small initial capacity.
   size_t mem_usage = tracker.MemUsage<http::ProtocolTraits>();
@@ -442,7 +442,7 @@ TEST_F(ConnTrackerTest, BufferClearedAfterExpiration) {
   tracker.ProcessToRecords<http::ProtocolTraits>();
   tracker.Cleanup<http::ProtocolTraits>(frame_size_limit_bytes, buffer_size_limit_bytes,
                                         frame_expiry_timestamp, buffer_expiry_timestamp);
-  EXPECT_EQ(tracker.req_data()->Frames<http::Message>().size(), 1);
+  EXPECT_EQ((tracker.req_data()->Frames<http::stream_id_t, http::Message>()[0].size()), 1);
 }
 
 TEST_F(ConnTrackerTest, BufferTruncatedBeyondSizeLimit) {
@@ -460,7 +460,7 @@ TEST_F(ConnTrackerTest, BufferTruncatedBeyondSizeLimit) {
   tracker.Cleanup<http::ProtocolTraits>(frame_size_limit_bytes, buffer_size_limit_bytes,
                                         frame_expiry_timestamp, buffer_expiry_timestamp);
   EXPECT_EQ(tracker.req_data()->data_buffer().size(), buffer_size_limit_bytes);
-  EXPECT_THAT(tracker.req_frames<http::Message>(), IsEmpty());
+  EXPECT_THAT((tracker.req_frames<http::stream_id_t, http::Message>()[0]), IsEmpty());
 }
 
 TEST_F(ConnTrackerTest, MessagesErasedAfterExpiration) {
@@ -480,13 +480,13 @@ TEST_F(ConnTrackerTest, MessagesErasedAfterExpiration) {
   tracker.ProcessToRecords<http::ProtocolTraits>();
   tracker.Cleanup<http::ProtocolTraits>(frame_size_limit_bytes, buffer_size_limit_bytes,
                                         frame_expiry_timestamp, buffer_expiry_timestamp);
-  EXPECT_THAT(tracker.req_frames<http::Message>(), SizeIs(1));
+  EXPECT_THAT((tracker.req_frames<http::stream_id_t, http::Message>()[0]), SizeIs(1));
 
   frame_expiry_timestamp = now();
   tracker.ProcessToRecords<http::ProtocolTraits>();
   tracker.Cleanup<http::ProtocolTraits>(frame_size_limit_bytes, buffer_size_limit_bytes,
                                         frame_expiry_timestamp, buffer_expiry_timestamp);
-  EXPECT_THAT(tracker.req_frames<http::Message>(), IsEmpty());
+  EXPECT_THAT((tracker.req_frames<http::stream_id_t, http::Message>()[0]), IsEmpty());
 }
 
 // Tests that tracker state is kDisabled if the remote address is in the cluster's CIDR range.
@@ -512,8 +512,8 @@ TEST_F(ConnTrackerTest, DisabledForIntraClusterRemoteEndpoint) {
 // Tests that tracker state is kDisabled if the remote address is localhost.
 TEST_F(ConnTrackerTest, DisabledForLocalhostRemoteEndpoint) {
   struct socket_control_event_t conn = event_gen_.InitConn();
-  conn.open.addr.in6.sin6_addr = IN6ADDR_LOOPBACK_INIT;
-  conn.open.addr.in6.sin6_family = AF_INET6;
+  conn.open.raddr.in6.sin6_addr = IN6ADDR_LOOPBACK_INIT;
+  conn.open.raddr.in6.sin6_family = AF_INET6;
 
   CIDRBlock cidr;
   ASSERT_OK(ParseCIDRBlock("1.2.3.4/14", &cidr));
@@ -545,7 +545,7 @@ TEST_F(ConnTrackerTest, TrackerCollectingForClientSideTracingWithNoCIDR) {
 // Tests that tracker state is kDisabled if the remote address is Unix domain socket.
 TEST_F(ConnTrackerTest, DisabledForUnixDomainSockets) {
   struct socket_control_event_t conn = event_gen_.InitConn();
-  conn.open.addr.in6.sin6_family = AF_UNIX;
+  conn.open.raddr.in6.sin6_family = AF_UNIX;
 
   CIDRBlock cidr;
   ASSERT_OK(ParseCIDRBlock("1.2.3.4/14", &cidr));
@@ -561,7 +561,7 @@ TEST_F(ConnTrackerTest, DisabledForUnixDomainSockets) {
 TEST_F(ConnTrackerTest, DisabledForOtherSockAddrFamily) {
   struct socket_control_event_t conn = event_gen_.InitConn();
   // Any non-IP family works for testing purposes.
-  conn.open.addr.in6.sin6_family = AF_NETLINK;
+  conn.open.raddr.in6.sin6_family = AF_NETLINK;
 
   CIDRBlock cidr;
   ASSERT_OK(ParseCIDRBlock("1.2.3.4/14", &cidr));
@@ -617,7 +617,7 @@ TEST_F(ConnTrackerTest, DisabledForNonTrackedUPID) {
   CIDRBlock cidr;
   ASSERT_OK(ParseCIDRBlock("1.2.3.4/14", &cidr));
 
-  PL_SET_FOR_SCOPE(FLAGS_stirling_untracked_upid_threshold_seconds, 1);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_untracked_upid_threshold_seconds, 1);
 
   ConnTracker tracker;
   tracker.AddControlEvent(conn);
@@ -775,9 +775,9 @@ TEST_F(ConnTrackerTest, ConnStats) {
   conn_stats_event.timestamp_ns = 0;
   conn_stats_event.conn_id = kConnID0;
   conn_stats_event.role = kRoleClient;
-  reinterpret_cast<struct sockaddr_in*>(&conn_stats_event.addr)->sin_family = AF_INET;
-  reinterpret_cast<struct sockaddr_in*>(&conn_stats_event.addr)->sin_port = htons(80);
-  reinterpret_cast<struct sockaddr_in*>(&conn_stats_event.addr)->sin_addr.s_addr =
+  reinterpret_cast<struct sockaddr_in*>(&conn_stats_event.raddr)->sin_family = AF_INET;
+  reinterpret_cast<struct sockaddr_in*>(&conn_stats_event.raddr)->sin_port = htons(80);
+  reinterpret_cast<struct sockaddr_in*>(&conn_stats_event.raddr)->sin_addr.s_addr =
       0x01010101;  // 1.1.1.1
   conn_stats_event.conn_events = 0;
   conn_stats_event.rd_bytes = 0;

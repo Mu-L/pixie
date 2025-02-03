@@ -17,12 +17,17 @@
  */
 
 #include <google/protobuf/text_format.h>
+#include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "src/common/event/event.h"
+#include "src/common/testing/event/simulated_time_system.h"
 #include "src/common/testing/testing.h"
 #include "src/shared/k8s/metadatapb/metadata.pb.h"
 #include "src/shared/metadata/cgroup_metadata_reader_mock.h"
+#include "src/shared/metadata/metadata_state.h"
 #include "src/shared/metadata/state_manager.h"
 #include "src/shared/metadata/test_utils.h"
 
@@ -247,14 +252,23 @@ class AgentMetadataStateTest : public ::testing::Test {
   static constexpr char kHostname[] = "myhost";
   static constexpr char kPodName[] = "mypod";
   static constexpr char kVizierName[] = "myvizier";
+  static constexpr char kVizierNamespace[] = "myviziernamespace";
 
   AgentMetadataStateTest()
       : agent_id_(sole::uuid4()),
         vizier_id_(sole::uuid4()),
-        metadata_state_(kHostname, kASID, kPID, agent_id_, kPodName, vizier_id_, kVizierName) {}
+        start_monotonic_time_(std::chrono::steady_clock::now()),
+        start_system_time_(std::chrono::system_clock::now()),
+        time_system_(std::make_unique<event::SimulatedTimeSystem>(start_monotonic_time_,
+                                                                  start_system_time_)),
+        metadata_state_(kHostname, kASID, kPID, agent_id_, kPodName, vizier_id_, kVizierName,
+                        kVizierNamespace, time_system_.get()) {}
 
   sole::uuid agent_id_;
   sole::uuid vizier_id_;
+  event::MonotonicTimePoint start_monotonic_time_;
+  event::SystemTimePoint start_system_time_;
+  std::unique_ptr<event::SimulatedTimeSystem> time_system_;
   AgentMetadataState metadata_state_;
   TestAgentMetadataFilter md_filter_;
 };
@@ -273,6 +287,7 @@ TEST_F(AgentMetadataStateTest, initialize_md_state) {
   EXPECT_EQ(agent_id_.str(), metadata_state_.agent_id().str());
   EXPECT_EQ(vizier_id_.str(), metadata_state_.vizier_id().str());
   EXPECT_EQ("myvizier", metadata_state_.vizier_name());
+  EXPECT_EQ("myviziernamespace", metadata_state_.vizier_namespace());
 
   K8sMetadataState* state = metadata_state_.k8s_metadata_state();
   EXPECT_THAT(state->pods_by_name(), UnorderedElementsAre(Pair(Pair("pl", "pod1"), "pod_id1")));
@@ -363,7 +378,7 @@ TEST_F(AgentMetadataStateTest, pid_created) {
   LOG(INFO) << metadata_state_.DebugString();
 
   const auto proc_path = testing::BazelRunfilePath("src/shared/metadata/testdata/proc");
-  PL_SET_FOR_SCOPE(FLAGS_proc_path, proc_path.string());
+  PX_SET_FOR_SCOPE(FLAGS_proc_path, proc_path.string());
   system::ProcParser proc_parser;
   EXPECT_OK(ProcessPIDUpdates(1000, proc_parser, &metadata_state_, &md_reader, &events));
 
@@ -403,10 +418,11 @@ TEST_F(AgentMetadataStateTest, insert_into_filter) {
 }
 
 TEST_F(AgentMetadataStateTest, cidr_test) {
-  AgentMetadataStateManagerImpl mgr("test_host", /*asid*/ 0, /*pid*/ 987, "test_pod",
-                                    /*id*/ sole::uuid4(),
-                                    /*collects_data*/ true, px::system::Config::GetInstance(),
-                                    &md_filter_, /*vizier_id*/ sole::uuid4(), "test_vizier");
+  AgentMetadataStateManagerImpl mgr(
+      "test_host", /*asid*/ 0, /*pid*/ 987, "test_pod",
+      /*id*/ sole::uuid4(),
+      /*collects_data*/ true, px::system::Config::GetInstance(), &md_filter_,
+      /*vizier_id*/ sole::uuid4(), "test_vizier", "test_vizier_namespace", time_system_.get());
 
   EXPECT_OK(mgr.PerformMetadataStateUpdate());
   // Should not be updated yet.

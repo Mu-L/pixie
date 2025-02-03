@@ -29,7 +29,7 @@
 
 #include "src/common/testing/testing.h"
 #include "src/stirling/core/connector_context.h"
-#include "src/stirling/core/data_table.h"
+#include "src/stirling/core/data_tables.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/cql/test_utils.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/event_generator.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_connector_friend.h"
@@ -163,7 +163,7 @@ class SocketTraceConnectorTest : public ::testing::Test {
 
     // Set the CIDR for HTTP2ServerTest, which would otherwise not output any data,
     // because it would think the server is in the cluster.
-    PL_CHECK_OK(ctx_->SetClusterCIDR("1.2.3.4/32"));
+    PX_CHECK_OK(ctx_->SetClusterCIDR("1.2.3.4/32"));
 
     // Because some tests change the inactivity duration, make sure to reset it here for each test.
     ConnTracker::set_inactivity_duration(ConnTracker::kDefaultInactivityDuration);
@@ -172,7 +172,7 @@ class SocketTraceConnectorTest : public ::testing::Test {
     FLAGS_stirling_conn_stats_sampling_ratio = 1;
   }
 
-  testing::DataTables data_tables_{SocketTraceConnector::kTables};
+  DataTables data_tables_{SocketTraceConnector::kTables};
 
   DataTable* http_table_ = data_tables_[kHTTPTableNum];
   DataTable* cql_table_ = data_tables_[kCQLTableNum];
@@ -310,7 +310,7 @@ TEST_F(SocketTraceConnectorTest, Truncation) {
       "\r\n"
       "abcdefghijklmnopqrstuvwxyz";
 
-  PL_SET_FOR_SCOPE(FLAGS_max_body_bytes, 5);
+  PX_SET_FOR_SCOPE(FLAGS_max_body_bytes, 5);
 
   struct socket_control_event_t conn = event_gen_.InitConn();
   std::unique_ptr<SocketDataEvent> req_event0 = event_gen_.InitSendEvent<kProtocolHTTP>(kReq0);
@@ -532,7 +532,7 @@ TEST_F(SocketTraceConnectorTest, MissingEventInStream) {
   source_->AcceptDataEvent(std::move(req_event1));
   source_->AcceptDataEvent(std::move(req_event2));
   source_->AcceptDataEvent(std::move(resp_event0));
-  PL_UNUSED(resp_event1);  // Missing event.
+  PX_UNUSED(resp_event1);  // Missing event.
   source_->AcceptDataEvent(std::move(resp_event2));
   connector_->TransferData(ctx_.get());
 
@@ -651,7 +651,7 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupMissingDataEvent) {
   source_->AcceptDataEvent(std::move(req_event1));
   source_->AcceptDataEvent(std::move(req_event2));
   source_->AcceptDataEvent(std::move(resp_event0));
-  PL_UNUSED(resp_event1);  // Missing event.
+  PX_UNUSED(resp_event1);  // Missing event.
   source_->AcceptDataEvent(std::move(resp_event2));
   source_->AcceptControlEvent(close_event);
 
@@ -697,8 +697,8 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupOldGenerations) {
   source_->AcceptDataEvent(std::move(conn1_req_event));
   source_->AcceptControlEvent(conn2);
   source_->AcceptDataEvent(std::move(conn2_resp_event));
-  PL_UNUSED(conn0_close);  // Missing close event.
-  PL_UNUSED(conn1_close);  // Missing close event.
+  PX_UNUSED(conn0_close);  // Missing close event.
+  PX_UNUSED(conn1_close);  // Missing close event.
 
   connector_->TransferData(ctx_.get());
   EXPECT_OK(source_->GetConnTracker(kPID, kFD));
@@ -736,7 +736,7 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupNoProtocol) {
 TEST_F(SocketTraceConnectorTest, ConnectionCleanupCollecting) {
   // Create an event with family PX_AF_UNKNOWN so that tracker goes into collecting state.
   struct socket_control_event_t conn0 = event_gen_.InitConn();
-  conn0.open.addr.sa.sa_family = PX_AF_UNKNOWN;
+  conn0.open.raddr.sa.sa_family = PX_AF_UNKNOWN;
 
   std::unique_ptr<SocketDataEvent> conn0_req_event =
       event_gen_.InitSendEvent<kProtocolHTTP>(kReq0.substr(0, 10));
@@ -764,7 +764,7 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupCollecting) {
   }
 
   // Now set retention size to 0 and expect the collecting tracker to be cleaned-up.
-  PL_SET_FOR_SCOPE(FLAGS_datastream_buffer_retention_size, 0);
+  PX_SET_FOR_SCOPE(FLAGS_datastream_buffer_retention_size, 0);
   connector_->TransferData(ctx_.get());
 
   {
@@ -775,7 +775,7 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupCollecting) {
 }
 
 TEST_F(SocketTraceConnectorTest, ConnectionCleanupInactiveDead) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_check_proc_for_conn_close, true);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_check_proc_for_conn_close, true);
 
   // Inactive dead connections are determined by checking the /proc filesystem.
   // Here we create a PID that is a valid number, but non-existent on any Linux system.
@@ -812,7 +812,7 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupInactiveDead) {
 }
 
 TEST_F(SocketTraceConnectorTest, ConnectionCleanupInactiveAlive) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_check_proc_for_conn_close, true);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_check_proc_for_conn_close, true);
   std::chrono::seconds kInactivityDuration(1);
   ConnTracker::set_inactivity_duration(kInactivityDuration);
 
@@ -856,12 +856,12 @@ TEST_F(SocketTraceConnectorTest, ConnectionCleanupInactiveAlive) {
 
   // Events should have been flushed.
   ASSERT_OK_AND_ASSIGN(const ConnTracker* tracker, source_->GetConnTracker(real_pid, real_fd));
-  EXPECT_TRUE(tracker->recv_data().Empty<http::Message>());
-  EXPECT_TRUE(tracker->send_data().Empty<http::Message>());
+  EXPECT_TRUE((tracker->recv_data().Empty<http::stream_id_t, http::Message>()));
+  EXPECT_TRUE((tracker->send_data().Empty<http::stream_id_t, http::Message>()));
 }
 
 TEST_F(SocketTraceConnectorTest, TrackedUPIDTransfersData) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_untracked_upid_threshold_seconds, 1);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_untracked_upid_threshold_seconds, 1);
 
   // By default, events come from a pid that is in the context.
   struct socket_control_event_t conn0 = event_gen_.InitConn();
@@ -889,7 +889,7 @@ TEST_F(SocketTraceConnectorTest, TrackedUPIDTransfersData) {
 }
 
 TEST_F(SocketTraceConnectorTest, UntrackedUPIDDoesNotTransferData) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_untracked_upid_threshold_seconds, 1);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_untracked_upid_threshold_seconds, 1);
 
   // Choose an event generator for a pid that is not in the context.
   const uint32_t kNonContextPID = 1;

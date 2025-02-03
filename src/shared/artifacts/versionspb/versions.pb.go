@@ -33,6 +33,7 @@ const (
 	AT_UNKNOWN                      ArtifactType = 0
 	AT_LINUX_AMD64                  ArtifactType = 1
 	AT_DARWIN_AMD64                 ArtifactType = 2
+	AT_DARWIN_ARM64                 ArtifactType = 3
 	AT_CONTAINER_SET_YAMLS          ArtifactType = 50
 	AT_CONTAINER_SET_TEMPLATE_YAMLS ArtifactType = 60
 	AT_CONTAINER_SET_LINUX_AMD64    ArtifactType = 100
@@ -42,6 +43,7 @@ var ArtifactType_name = map[int32]string{
 	0:   "AT_UNKNOWN",
 	1:   "AT_LINUX_AMD64",
 	2:   "AT_DARWIN_AMD64",
+	3:   "AT_DARWIN_ARM64",
 	50:  "AT_CONTAINER_SET_YAMLS",
 	60:  "AT_CONTAINER_SET_TEMPLATE_YAMLS",
 	100: "AT_CONTAINER_SET_LINUX_AMD64",
@@ -51,6 +53,7 @@ var ArtifactType_value = map[string]int32{
 	"AT_UNKNOWN":                      0,
 	"AT_LINUX_AMD64":                  1,
 	"AT_DARWIN_AMD64":                 2,
+	"AT_DARWIN_ARM64":                 3,
 	"AT_CONTAINER_SET_YAMLS":          50,
 	"AT_CONTAINER_SET_TEMPLATE_YAMLS": 60,
 	"AT_CONTAINER_SET_LINUX_AMD64":    100,
@@ -111,18 +114,78 @@ func (m *ArtifactSet) GetArtifact() []*Artifact {
 	return nil
 }
 
+type ArtifactMirrors struct {
+	ArtifactType ArtifactType `protobuf:"varint,1,opt,name=artifact_type,json=artifactType,proto3,enum=px.versions.ArtifactType" json:"artifact_type,omitempty"`
+	SHA256       string       `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	URLs         []string     `protobuf:"bytes,3,rep,name=urls,proto3" json:"urls,omitempty"`
+}
+
+func (m *ArtifactMirrors) Reset()      { *m = ArtifactMirrors{} }
+func (*ArtifactMirrors) ProtoMessage() {}
+func (*ArtifactMirrors) Descriptor() ([]byte, []int) {
+	return fileDescriptor_11101fe785e211c4, []int{1}
+}
+func (m *ArtifactMirrors) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *ArtifactMirrors) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_ArtifactMirrors.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *ArtifactMirrors) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ArtifactMirrors.Merge(m, src)
+}
+func (m *ArtifactMirrors) XXX_Size() int {
+	return m.Size()
+}
+func (m *ArtifactMirrors) XXX_DiscardUnknown() {
+	xxx_messageInfo_ArtifactMirrors.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ArtifactMirrors proto.InternalMessageInfo
+
+func (m *ArtifactMirrors) GetArtifactType() ArtifactType {
+	if m != nil {
+		return m.ArtifactType
+	}
+	return AT_UNKNOWN
+}
+
+func (m *ArtifactMirrors) GetSHA256() string {
+	if m != nil {
+		return m.SHA256
+	}
+	return ""
+}
+
+func (m *ArtifactMirrors) GetURLs() []string {
+	if m != nil {
+		return m.URLs
+	}
+	return nil
+}
+
 type Artifact struct {
-	Timestamp          *types.Timestamp `protobuf:"bytes,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	CommitHash         string           `protobuf:"bytes,2,opt,name=commit_hash,json=commitHash,proto3" json:"commit_hash,omitempty"`
-	VersionStr         string           `protobuf:"bytes,3,opt,name=version_str,json=versionStr,proto3" json:"version_str,omitempty"`
-	AvailableArtifacts []ArtifactType   `protobuf:"varint,4,rep,packed,name=available_artifacts,json=availableArtifacts,proto3,enum=px.versions.ArtifactType" json:"available_artifacts,omitempty"`
-	Changelog          string           `protobuf:"bytes,5,opt,name=changelog,proto3" json:"changelog,omitempty"`
+	Timestamp                *types.Timestamp   `protobuf:"bytes,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	CommitHash               string             `protobuf:"bytes,2,opt,name=commit_hash,json=commitHash,proto3" json:"commit_hash,omitempty"`
+	VersionStr               string             `protobuf:"bytes,3,opt,name=version_str,json=versionStr,proto3" json:"version_str,omitempty"`
+	AvailableArtifacts       []ArtifactType     `protobuf:"varint,4,rep,packed,name=available_artifacts,json=availableArtifacts,proto3,enum=px.versions.ArtifactType" json:"available_artifacts,omitempty"` // Deprecated: Do not use.
+	Changelog                string             `protobuf:"bytes,5,opt,name=changelog,proto3" json:"changelog,omitempty"`
+	AvailableArtifactMirrors []*ArtifactMirrors `protobuf:"bytes,6,rep,name=available_artifact_mirrors,json=availableArtifactMirrors,proto3" json:"available_artifact_mirrors,omitempty"`
 }
 
 func (m *Artifact) Reset()      { *m = Artifact{} }
 func (*Artifact) ProtoMessage() {}
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return fileDescriptor_11101fe785e211c4, []int{1}
+	return fileDescriptor_11101fe785e211c4, []int{2}
 }
 func (m *Artifact) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -172,6 +235,7 @@ func (m *Artifact) GetVersionStr() string {
 	return ""
 }
 
+// Deprecated: Do not use.
 func (m *Artifact) GetAvailableArtifacts() []ArtifactType {
 	if m != nil {
 		return m.AvailableArtifacts
@@ -186,9 +250,17 @@ func (m *Artifact) GetChangelog() string {
 	return ""
 }
 
+func (m *Artifact) GetAvailableArtifactMirrors() []*ArtifactMirrors {
+	if m != nil {
+		return m.AvailableArtifactMirrors
+	}
+	return nil
+}
+
 func init() {
 	proto.RegisterEnum("px.versions.ArtifactType", ArtifactType_name, ArtifactType_value)
 	proto.RegisterType((*ArtifactSet)(nil), "px.versions.ArtifactSet")
+	proto.RegisterType((*ArtifactMirrors)(nil), "px.versions.ArtifactMirrors")
 	proto.RegisterType((*Artifact)(nil), "px.versions.Artifact")
 }
 
@@ -197,37 +269,44 @@ func init() {
 }
 
 var fileDescriptor_11101fe785e211c4 = []byte{
-	// 467 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x6c, 0x92, 0x4f, 0x6f, 0xd3, 0x30,
-	0x18, 0x87, 0xe3, 0x76, 0xa0, 0xd5, 0x41, 0xa5, 0xf2, 0x04, 0x0a, 0xd5, 0xe4, 0x56, 0xe3, 0x52,
-	0x21, 0x91, 0x88, 0x82, 0x10, 0x07, 0x0e, 0x18, 0x56, 0x89, 0x42, 0x9b, 0xa1, 0xd4, 0xd3, 0x80,
-	0x8b, 0xe5, 0x64, 0x59, 0x12, 0xa9, 0xa9, 0xa3, 0xd8, 0x9b, 0xe0, 0xc6, 0x47, 0xe0, 0x63, 0x20,
-	0x3e, 0x09, 0xc7, 0x1e, 0x77, 0xa4, 0xe9, 0x85, 0x63, 0x3f, 0x02, 0x22, 0xff, 0x5a, 0x69, 0xdc,
-	0x5e, 0xff, 0xf2, 0xbc, 0xef, 0xfb, 0x24, 0x31, 0x34, 0x65, 0xea, 0x59, 0x32, 0xe4, 0xa9, 0x7f,
-	0x6e, 0xf1, 0x54, 0x45, 0x17, 0xdc, 0x53, 0xd2, 0xba, 0xf2, 0x53, 0x19, 0x89, 0x85, 0x4c, 0xdc,
-	0xba, 0x34, 0x93, 0x54, 0x28, 0x81, 0xf4, 0xe4, 0x8b, 0x59, 0x45, 0xdd, 0xc7, 0x41, 0xa4, 0xc2,
-	0x4b, 0xd7, 0xf4, 0x44, 0x6c, 0x05, 0x22, 0x10, 0x56, 0xce, 0xb8, 0x97, 0x17, 0xf9, 0x29, 0x3f,
-	0xe4, 0x55, 0xd1, 0xdb, 0xed, 0x05, 0x42, 0x04, 0x73, 0x7f, 0x4b, 0xa9, 0x28, 0xf6, 0xa5, 0xe2,
-	0x71, 0x52, 0x00, 0x47, 0x14, 0xea, 0xa4, 0x74, 0x98, 0xf9, 0x0a, 0x21, 0xb8, 0xb7, 0xe0, 0xb1,
-	0x6f, 0x80, 0x3e, 0x18, 0xb4, 0x9c, 0xbc, 0x46, 0x4f, 0xe0, 0x7e, 0xa5, 0x69, 0x34, 0xfa, 0xcd,
-	0x81, 0x3e, 0xbc, 0x67, 0xee, 0x28, 0x99, 0x55, 0xbf, 0x53, 0x63, 0x47, 0x1b, 0x00, 0xf7, 0xab,
-	0x18, 0xbd, 0x80, 0xad, 0x7a, 0x6b, 0x3e, 0x58, 0x1f, 0x76, 0xcd, 0xc2, 0xcb, 0xac, 0xbc, 0x4c,
-	0x5a, 0x11, 0xce, 0x16, 0x46, 0x3d, 0xa8, 0x7b, 0x22, 0x8e, 0x23, 0xc5, 0x42, 0x2e, 0x43, 0xa3,
-	0x91, 0x4b, 0xc1, 0x22, 0x7a, 0xcb, 0x65, 0xf8, 0x0f, 0x28, 0x35, 0x98, 0x54, 0xa9, 0xd1, 0x2c,
-	0x80, 0x32, 0x9a, 0xa9, 0x14, 0xbd, 0x83, 0x07, 0xfc, 0x8a, 0x47, 0x73, 0xee, 0xce, 0x7d, 0x56,
-	0x7f, 0x6c, 0x63, 0xaf, 0xdf, 0x1c, 0xb4, 0x87, 0x0f, 0xfe, 0xfb, 0x1a, 0xf4, 0x6b, 0xe2, 0x3b,
-	0xa8, 0xee, 0xaa, 0x62, 0x89, 0x0e, 0x61, 0xcb, 0x0b, 0xf9, 0x22, 0xf0, 0xe7, 0x22, 0x30, 0x6e,
-	0xe5, 0xab, 0xb6, 0xc1, 0xa3, 0x9f, 0x00, 0xde, 0xd9, 0x1d, 0x81, 0xda, 0x10, 0x12, 0xca, 0x4e,
-	0xed, 0xf7, 0xf6, 0xc9, 0x99, 0xdd, 0xd1, 0x10, 0x82, 0x6d, 0x42, 0xd9, 0x64, 0x6c, 0x9f, 0x7e,
-	0x64, 0x64, 0x7a, 0xfc, 0xfc, 0x59, 0x07, 0xa0, 0x03, 0x78, 0x97, 0x50, 0x76, 0x4c, 0x9c, 0xb3,
-	0xb1, 0x5d, 0x86, 0x0d, 0xd4, 0x85, 0xf7, 0x09, 0x65, 0x6f, 0x4e, 0x6c, 0x4a, 0xc6, 0xf6, 0xc8,
-	0x61, 0xb3, 0x11, 0x65, 0x9f, 0xc8, 0x74, 0x32, 0xeb, 0x0c, 0xd1, 0x43, 0xd8, 0xbb, 0xf1, 0x8c,
-	0x8e, 0xa6, 0x1f, 0x26, 0x84, 0x8e, 0x4a, 0xe8, 0x25, 0xea, 0xc3, 0xc3, 0x1b, 0xd0, 0xee, 0xde,
-	0xf3, 0xd7, 0xaf, 0x96, 0x2b, 0xac, 0x5d, 0xaf, 0xb0, 0xb6, 0x59, 0x61, 0xf0, 0x2d, 0xc3, 0xe0,
-	0x47, 0x86, 0xc1, 0xaf, 0x0c, 0x83, 0x65, 0x86, 0xc1, 0xef, 0x0c, 0x83, 0x3f, 0x19, 0xd6, 0x36,
-	0x19, 0x06, 0xdf, 0xd7, 0x58, 0x5b, 0xae, 0xb1, 0x76, 0xbd, 0xc6, 0xda, 0x67, 0xb8, 0xbd, 0xa3,
-	0xee, 0xed, 0xfc, 0xcf, 0x3d, 0xfd, 0x1b, 0x00, 0x00, 0xff, 0xff, 0xe2, 0xb9, 0xc6, 0x14, 0xcd,
-	0x02, 0x00, 0x00,
+	// 583 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x7c, 0x53, 0xcd, 0x6a, 0xdb, 0x4c,
+	0x14, 0xd5, 0x58, 0xfe, 0x4c, 0x7c, 0x9d, 0x2f, 0x31, 0x13, 0x5a, 0x54, 0x63, 0xc6, 0xc6, 0xdd,
+	0x84, 0x42, 0x65, 0xaa, 0x26, 0xa6, 0x8b, 0x52, 0x2a, 0x37, 0x86, 0x84, 0xda, 0x4a, 0x19, 0x2b,
+	0xa4, 0xcd, 0x66, 0x18, 0x3b, 0x8a, 0x24, 0xb0, 0x22, 0xa1, 0x51, 0x42, 0xb3, 0xeb, 0x23, 0x14,
+	0xfa, 0x12, 0x7d, 0x8b, 0x6e, 0xbb, 0xf4, 0x32, 0xab, 0xd0, 0xc8, 0x9b, 0x2e, 0xf3, 0x08, 0x25,
+	0xfa, 0xb1, 0x4d, 0x1d, 0xba, 0xbb, 0xf7, 0x9c, 0x73, 0x7d, 0x8e, 0xef, 0x1d, 0x81, 0x2a, 0xc2,
+	0x71, 0x5b, 0x38, 0x3c, 0xb4, 0x4e, 0xdb, 0x3c, 0x8c, 0xdc, 0x33, 0x3e, 0x8e, 0x44, 0xfb, 0xd2,
+	0x0a, 0x85, 0xeb, 0x9f, 0x8b, 0x60, 0x34, 0x2f, 0xd5, 0x20, 0xf4, 0x23, 0x1f, 0x57, 0x82, 0xcf,
+	0x6a, 0x0e, 0xd5, 0x9e, 0xdb, 0x6e, 0xe4, 0x5c, 0x8c, 0xd4, 0xb1, 0xef, 0xb5, 0x6d, 0xdf, 0xf6,
+	0xdb, 0x89, 0x66, 0x74, 0x71, 0x96, 0x74, 0x49, 0x93, 0x54, 0xe9, 0x6c, 0xad, 0x61, 0xfb, 0xbe,
+	0x3d, 0xb1, 0x16, 0xaa, 0xc8, 0xf5, 0x2c, 0x11, 0x71, 0x2f, 0x48, 0x05, 0x2d, 0x13, 0x2a, 0x7a,
+	0x96, 0x61, 0x68, 0x45, 0x18, 0x43, 0xf1, 0x9c, 0x7b, 0x96, 0x82, 0x9a, 0x68, 0xbb, 0x4c, 0x93,
+	0x1a, 0xbf, 0x80, 0xb5, 0x3c, 0xa6, 0x52, 0x68, 0xca, 0xdb, 0x15, 0xed, 0x91, 0xba, 0x14, 0x49,
+	0xcd, 0xe7, 0xe9, 0x5c, 0xd6, 0xfa, 0x86, 0x60, 0x33, 0x87, 0x07, 0x6e, 0x18, 0xfa, 0xa1, 0xc0,
+	0x6f, 0xe0, 0xff, 0x9c, 0x67, 0xd1, 0x55, 0x90, 0x7a, 0x6c, 0x68, 0x4f, 0x1e, 0xfc, 0x2d, 0xf3,
+	0x2a, 0xb0, 0xe8, 0x3a, 0x5f, 0xea, 0x70, 0x0b, 0x4a, 0xc2, 0xe1, 0xda, 0x6e, 0x47, 0x29, 0xdc,
+	0x87, 0xeb, 0x42, 0x7c, 0xd3, 0x28, 0x0d, 0xf7, 0x75, 0x6d, 0xb7, 0x43, 0x33, 0x06, 0xd7, 0xa1,
+	0x78, 0x11, 0x4e, 0x84, 0x22, 0x37, 0xe5, 0xed, 0x72, 0x77, 0x2d, 0xbe, 0x69, 0x14, 0x8f, 0x68,
+	0x5f, 0xd0, 0x04, 0x6d, 0x4d, 0x0b, 0xb0, 0x96, 0x1b, 0xe0, 0x57, 0x50, 0x9e, 0xef, 0x22, 0x89,
+	0x52, 0xd1, 0x6a, 0x6a, 0xba, 0x2d, 0x35, 0xdf, 0x96, 0x6a, 0xe6, 0x0a, 0xba, 0x10, 0xe3, 0x06,
+	0x54, 0xc6, 0xbe, 0xe7, 0xb9, 0x11, 0x73, 0xb8, 0x70, 0xd2, 0x34, 0x14, 0x52, 0x68, 0x9f, 0x0b,
+	0xe7, 0x5e, 0x90, 0xfd, 0x21, 0x26, 0xa2, 0x50, 0x91, 0x53, 0x41, 0x06, 0x0d, 0xa3, 0x10, 0x1b,
+	0xb0, 0xc5, 0x2f, 0xb9, 0x3b, 0xe1, 0xa3, 0x89, 0xc5, 0xe6, 0x4f, 0x40, 0x29, 0x36, 0xe5, 0x7f,
+	0x2e, 0xa4, 0x5b, 0x50, 0x10, 0xc5, 0xf3, 0xc9, 0x9c, 0x12, 0xb8, 0x0e, 0xe5, 0xb1, 0xc3, 0xcf,
+	0x6d, 0x6b, 0xe2, 0xdb, 0xca, 0x7f, 0x89, 0xdd, 0x02, 0xc0, 0x27, 0x50, 0x5b, 0x75, 0x63, 0x5e,
+	0x7a, 0x16, 0xa5, 0x94, 0x5c, 0xb4, 0xfe, 0xa0, 0x69, 0x76, 0x3a, 0xaa, 0xac, 0x78, 0x66, 0xcc,
+	0xb3, 0x1f, 0x08, 0xd6, 0x97, 0x23, 0xe2, 0x0d, 0x00, 0xdd, 0x64, 0x47, 0xc6, 0x7b, 0xe3, 0xf0,
+	0xd8, 0xa8, 0x4a, 0x18, 0xc3, 0x86, 0x6e, 0xb2, 0xfe, 0x81, 0x71, 0xf4, 0x91, 0xe9, 0x83, 0xbd,
+	0xce, 0x4e, 0x15, 0xe1, 0x2d, 0xd8, 0xd4, 0x4d, 0xb6, 0xa7, 0xd3, 0xe3, 0x03, 0x23, 0x03, 0x0b,
+	0x7f, 0x81, 0x74, 0xd0, 0xd9, 0xa9, 0xca, 0xb8, 0x06, 0x8f, 0x75, 0x93, 0xbd, 0x3b, 0x34, 0x4c,
+	0xfd, 0xc0, 0xe8, 0x51, 0x36, 0xec, 0x99, 0xec, 0x93, 0x3e, 0xe8, 0x0f, 0xab, 0x1a, 0x7e, 0x0a,
+	0x8d, 0x15, 0xce, 0xec, 0x0d, 0x3e, 0xf4, 0x75, 0xb3, 0x97, 0x89, 0x5e, 0xe3, 0x26, 0xd4, 0x57,
+	0x44, 0xcb, 0x61, 0x4e, 0xbb, 0x6f, 0xa7, 0xb7, 0x44, 0xba, 0xbe, 0x25, 0xd2, 0xdd, 0x2d, 0x41,
+	0x5f, 0x62, 0x82, 0xbe, 0xc7, 0x04, 0xfd, 0x8c, 0x09, 0x9a, 0xc6, 0x04, 0xfd, 0x8a, 0x09, 0xfa,
+	0x1d, 0x13, 0xe9, 0x2e, 0x26, 0xe8, 0xeb, 0x8c, 0x48, 0xd3, 0x19, 0x91, 0xae, 0x67, 0x44, 0x3a,
+	0x81, 0xc5, 0xe7, 0x3a, 0x2a, 0x25, 0xcf, 0xe5, 0xe5, 0x9f, 0x00, 0x00, 0x00, 0xff, 0xff, 0x3d,
+	0x32, 0x0a, 0x38, 0xd8, 0x03, 0x00, 0x00,
 }
 
 func (x ArtifactType) String() string {
@@ -264,6 +343,41 @@ func (this *ArtifactSet) Equal(that interface{}) bool {
 	}
 	for i := range this.Artifact {
 		if !this.Artifact[i].Equal(that1.Artifact[i]) {
+			return false
+		}
+	}
+	return true
+}
+func (this *ArtifactMirrors) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	that1, ok := that.(*ArtifactMirrors)
+	if !ok {
+		that2, ok := that.(ArtifactMirrors)
+		if ok {
+			that1 = &that2
+		} else {
+			return false
+		}
+	}
+	if that1 == nil {
+		return this == nil
+	} else if this == nil {
+		return false
+	}
+	if this.ArtifactType != that1.ArtifactType {
+		return false
+	}
+	if this.SHA256 != that1.SHA256 {
+		return false
+	}
+	if len(this.URLs) != len(that1.URLs) {
+		return false
+	}
+	for i := range this.URLs {
+		if this.URLs[i] != that1.URLs[i] {
 			return false
 		}
 	}
@@ -308,6 +422,14 @@ func (this *Artifact) Equal(that interface{}) bool {
 	if this.Changelog != that1.Changelog {
 		return false
 	}
+	if len(this.AvailableArtifactMirrors) != len(that1.AvailableArtifactMirrors) {
+		return false
+	}
+	for i := range this.AvailableArtifactMirrors {
+		if !this.AvailableArtifactMirrors[i].Equal(that1.AvailableArtifactMirrors[i]) {
+			return false
+		}
+	}
 	return true
 }
 func (this *ArtifactSet) GoString() string {
@@ -323,11 +445,23 @@ func (this *ArtifactSet) GoString() string {
 	s = append(s, "}")
 	return strings.Join(s, "")
 }
+func (this *ArtifactMirrors) GoString() string {
+	if this == nil {
+		return "nil"
+	}
+	s := make([]string, 0, 7)
+	s = append(s, "&versionspb.ArtifactMirrors{")
+	s = append(s, "ArtifactType: "+fmt.Sprintf("%#v", this.ArtifactType)+",\n")
+	s = append(s, "SHA256: "+fmt.Sprintf("%#v", this.SHA256)+",\n")
+	s = append(s, "URLs: "+fmt.Sprintf("%#v", this.URLs)+",\n")
+	s = append(s, "}")
+	return strings.Join(s, "")
+}
 func (this *Artifact) GoString() string {
 	if this == nil {
 		return "nil"
 	}
-	s := make([]string, 0, 9)
+	s := make([]string, 0, 10)
 	s = append(s, "&versionspb.Artifact{")
 	if this.Timestamp != nil {
 		s = append(s, "Timestamp: "+fmt.Sprintf("%#v", this.Timestamp)+",\n")
@@ -336,6 +470,9 @@ func (this *Artifact) GoString() string {
 	s = append(s, "VersionStr: "+fmt.Sprintf("%#v", this.VersionStr)+",\n")
 	s = append(s, "AvailableArtifacts: "+fmt.Sprintf("%#v", this.AvailableArtifacts)+",\n")
 	s = append(s, "Changelog: "+fmt.Sprintf("%#v", this.Changelog)+",\n")
+	if this.AvailableArtifactMirrors != nil {
+		s = append(s, "AvailableArtifactMirrors: "+fmt.Sprintf("%#v", this.AvailableArtifactMirrors)+",\n")
+	}
 	s = append(s, "}")
 	return strings.Join(s, "")
 }
@@ -391,6 +528,50 @@ func (m *ArtifactSet) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *ArtifactMirrors) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ArtifactMirrors) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ArtifactMirrors) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.URLs) > 0 {
+		for iNdEx := len(m.URLs) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.URLs[iNdEx])
+			copy(dAtA[i:], m.URLs[iNdEx])
+			i = encodeVarintVersions(dAtA, i, uint64(len(m.URLs[iNdEx])))
+			i--
+			dAtA[i] = 0x1a
+		}
+	}
+	if len(m.SHA256) > 0 {
+		i -= len(m.SHA256)
+		copy(dAtA[i:], m.SHA256)
+		i = encodeVarintVersions(dAtA, i, uint64(len(m.SHA256)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.ArtifactType != 0 {
+		i = encodeVarintVersions(dAtA, i, uint64(m.ArtifactType))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *Artifact) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -411,6 +592,20 @@ func (m *Artifact) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if len(m.AvailableArtifactMirrors) > 0 {
+		for iNdEx := len(m.AvailableArtifactMirrors) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.AvailableArtifactMirrors[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintVersions(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x32
+		}
+	}
 	if len(m.Changelog) > 0 {
 		i -= len(m.Changelog)
 		copy(dAtA[i:], m.Changelog)
@@ -495,6 +690,28 @@ func (m *ArtifactSet) Size() (n int) {
 	return n
 }
 
+func (m *ArtifactMirrors) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ArtifactType != 0 {
+		n += 1 + sovVersions(uint64(m.ArtifactType))
+	}
+	l = len(m.SHA256)
+	if l > 0 {
+		n += 1 + l + sovVersions(uint64(l))
+	}
+	if len(m.URLs) > 0 {
+		for _, s := range m.URLs {
+			l = len(s)
+			n += 1 + l + sovVersions(uint64(l))
+		}
+	}
+	return n
+}
+
 func (m *Artifact) Size() (n int) {
 	if m == nil {
 		return 0
@@ -524,6 +741,12 @@ func (m *Artifact) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovVersions(uint64(l))
 	}
+	if len(m.AvailableArtifactMirrors) > 0 {
+		for _, e := range m.AvailableArtifactMirrors {
+			l = e.Size()
+			n += 1 + l + sovVersions(uint64(l))
+		}
+	}
 	return n
 }
 
@@ -549,16 +772,34 @@ func (this *ArtifactSet) String() string {
 	}, "")
 	return s
 }
+func (this *ArtifactMirrors) String() string {
+	if this == nil {
+		return "nil"
+	}
+	s := strings.Join([]string{`&ArtifactMirrors{`,
+		`ArtifactType:` + fmt.Sprintf("%v", this.ArtifactType) + `,`,
+		`SHA256:` + fmt.Sprintf("%v", this.SHA256) + `,`,
+		`URLs:` + fmt.Sprintf("%v", this.URLs) + `,`,
+		`}`,
+	}, "")
+	return s
+}
 func (this *Artifact) String() string {
 	if this == nil {
 		return "nil"
 	}
+	repeatedStringForAvailableArtifactMirrors := "[]*ArtifactMirrors{"
+	for _, f := range this.AvailableArtifactMirrors {
+		repeatedStringForAvailableArtifactMirrors += strings.Replace(f.String(), "ArtifactMirrors", "ArtifactMirrors", 1) + ","
+	}
+	repeatedStringForAvailableArtifactMirrors += "}"
 	s := strings.Join([]string{`&Artifact{`,
 		`Timestamp:` + strings.Replace(fmt.Sprintf("%v", this.Timestamp), "Timestamp", "types.Timestamp", 1) + `,`,
 		`CommitHash:` + fmt.Sprintf("%v", this.CommitHash) + `,`,
 		`VersionStr:` + fmt.Sprintf("%v", this.VersionStr) + `,`,
 		`AvailableArtifacts:` + fmt.Sprintf("%v", this.AvailableArtifacts) + `,`,
 		`Changelog:` + fmt.Sprintf("%v", this.Changelog) + `,`,
+		`AvailableArtifactMirrors:` + repeatedStringForAvailableArtifactMirrors + `,`,
 		`}`,
 	}, "")
 	return s
@@ -665,6 +906,139 @@ func (m *ArtifactSet) Unmarshal(dAtA []byte) error {
 			if err := m.Artifact[len(m.Artifact)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipVersions(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthVersions
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *ArtifactMirrors) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowVersions
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: ArtifactMirrors: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: ArtifactMirrors: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ArtifactType", wireType)
+			}
+			m.ArtifactType = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowVersions
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ArtifactType |= ArtifactType(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SHA256", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowVersions
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthVersions
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthVersions
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SHA256 = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field URLs", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowVersions
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthVersions
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthVersions
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.URLs = append(m.URLs, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -916,6 +1290,40 @@ func (m *Artifact) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.Changelog = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AvailableArtifactMirrors", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowVersions
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthVersions
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthVersions
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AvailableArtifactMirrors = append(m.AvailableArtifactMirrors, &ArtifactMirrors{})
+			if err := m.AvailableArtifactMirrors[len(m.AvailableArtifactMirrors)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

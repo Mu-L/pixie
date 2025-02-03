@@ -40,7 +40,7 @@ bool RegistryKey::operator<(const RegistryKey& lhs) const {
 udfspb::UDFInfo Registry::ToProto() {
   udfspb::UDFInfo info;
   for (const auto& [name, def] : map_) {
-    PL_UNUSED(name);
+    PX_UNUSED(name);
     switch (def->kind()) {
       case UDFDefinitionKind::kScalarUDF:
         ToProto(*static_cast<ScalarUDFDefinition*>(def.get()), info.add_scalar_udfs());
@@ -83,7 +83,7 @@ void Registry::ToProto(const UDADefinition& def, udfspb::UDASpec* spec) {
 }
 
 namespace {
-// PL_CARNOT_UPDATE_FOR_NEW_TYPES.
+// PX_CARNOT_UPDATE_FOR_NEW_TYPES.
 template <types::DataType dt, size_t S = sizeof(dt)>
 void DefaultToScalarValue(const UDTFArg&, planpb::ScalarValue*) {
   static_assert(S == 0, "This template func must be specialized for type");
@@ -92,21 +92,25 @@ void DefaultToScalarValue(const UDTFArg&, planpb::ScalarValue*) {
 template <>
 void DefaultToScalarValue<types::BOOLEAN>(const UDTFArg& arg, planpb::ScalarValue* out) {
   out->set_bool_value(arg.GetDefaultValue<types::BOOLEAN>().val);
+  out->set_data_type(types::BOOLEAN);
 }
 
 template <>
 void DefaultToScalarValue<types::INT64>(const UDTFArg& arg, planpb::ScalarValue* out) {
   out->set_int64_value(arg.GetDefaultValue<types::INT64>().val);
+  out->set_data_type(types::INT64);
 }
 
 template <>
 void DefaultToScalarValue<types::TIME64NS>(const UDTFArg& arg, planpb::ScalarValue* out) {
   out->set_time64_ns_value(arg.GetDefaultValue<types::TIME64NS>().val);
+  out->set_data_type(types::TIME64NS);
 }
 
 template <>
 void DefaultToScalarValue<types::FLOAT64>(const UDTFArg& arg, planpb::ScalarValue* out) {
   out->set_float64_value(arg.GetDefaultValue<types::FLOAT64>().val);
+  out->set_data_type(types::FLOAT64);
 }
 
 template <>
@@ -116,11 +120,13 @@ void DefaultToScalarValue<types::UINT128>(const UDTFArg& arg, planpb::ScalarValu
 
   out_val->set_high(casted_arg.High64());
   out_val->set_high(casted_arg.Low64());
+  out->set_data_type(types::UINT128);
 }
 
 template <>
 void DefaultToScalarValue<types::STRING>(const UDTFArg& arg, planpb::ScalarValue* out) {
   out->set_string_value(std::string(arg.GetDefaultValue<types::STRING>()));
+  out->set_data_type(types::STRING);
 }
 }  // namespace
 
@@ -137,7 +143,7 @@ void Registry::ToProto(const UDTFDefinition& def, udfspb::UDTFSourceSpec* spec) 
       auto arg_type = arg.type();
 #define TYPE_CASE(_dt_) DefaultToScalarValue<_dt_>(arg, new_arg->mutable_default_value());
 
-      PL_SWITCH_FOREACH_DATATYPE(arg_type, TYPE_CASE);
+      PX_SWITCH_FOREACH_DATATYPE(arg_type, TYPE_CASE);
 #undef TYPE_CASE
     }
   }
@@ -162,7 +168,7 @@ std::string Registry::DebugString() const {
 
 StatusOr<UDTFDefinition*> Registry::GetUDTFDefinition(
     const std::string& name, const std::vector<types::DataType>& registry_arg_types) const {
-  PL_ASSIGN_OR_RETURN(auto def, GetDefinition(name, registry_arg_types));
+  PX_ASSIGN_OR_RETURN(auto def, GetDefinition(name, registry_arg_types));
   if (def->kind() != UDFDefinitionKind::kUDTF) {
     return error::NotFound("'$0' is not a UDTF", name);
   }
@@ -171,7 +177,7 @@ StatusOr<UDTFDefinition*> Registry::GetUDTFDefinition(
 
 StatusOr<UDADefinition*> Registry::GetUDADefinition(
     const std::string& name, const std::vector<types::DataType>& registry_arg_types) const {
-  PL_ASSIGN_OR_RETURN(auto def, GetDefinition(name, registry_arg_types));
+  PX_ASSIGN_OR_RETURN(auto def, GetDefinition(name, registry_arg_types));
   if (def->kind() != UDFDefinitionKind::kUDA) {
     return error::NotFound("'$0' is not a UDA", name);
   }
@@ -180,7 +186,7 @@ StatusOr<UDADefinition*> Registry::GetUDADefinition(
 
 StatusOr<ScalarUDFDefinition*> Registry::GetScalarUDFDefinition(
     const std::string& name, const std::vector<types::DataType>& registry_arg_types) const {
-  PL_ASSIGN_OR_RETURN(auto def, GetDefinition(name, registry_arg_types));
+  PX_ASSIGN_OR_RETURN(auto def, GetDefinition(name, registry_arg_types));
   if (def->kind() != UDFDefinitionKind::kScalarUDF) {
     return error::NotFound("'$0' is not a ScalarUDF", name);
   }

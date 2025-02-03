@@ -47,8 +47,10 @@ struct conn_info_t {
   // Connection identifier (PID, FD, etc.).
   struct conn_id_t conn_id;
 
+  // IP address of the local endpoint.
+  union sockaddr_t laddr;
   // IP address of the remote endpoint.
-  union sockaddr_t addr;
+  union sockaddr_t raddr;
 
   // The protocol of traffic on the connection (HTTP, MySQL, etc.).
   enum traffic_protocol_t protocol;
@@ -58,6 +60,8 @@ struct conn_info_t {
 
   // Whether the connection uses SSL.
   bool ssl;
+
+  enum ssl_source_t ssl_source;
 
   // The number of bytes written/read on this connection.
   int64_t wr_bytes;
@@ -90,7 +94,8 @@ struct conn_info_t {
 // This struct is a subset of conn_info_t. It is used to communicate connect/accept events.
 // See conn_info_t for descriptions of the members.
 struct conn_event_t {
-  union sockaddr_t addr;
+  union sockaddr_t laddr;
+  union sockaddr_t raddr;
   enum endpoint_role_t role;
 };
 
@@ -126,7 +131,7 @@ struct close_event_t {
 // This defines how many chunks a perf_submit can support.
 // This applies to messages that are over MAX_MSG_SIZE,
 // and effectively makes the maximum message size to be CHUNK_LIMIT*MAX_MSG_SIZE.
-#define CHUNK_LIMIT 4
+#define CHUNK_LIMIT BPF_CHUNK_LIMIT
 
 // Unique ID to all syscalls and a few other notable functions.
 // This applies to events sent to user-space.
@@ -183,6 +188,8 @@ struct socket_data_event_t {
     // Whether the traffic was collected from an encrypted channel.
     bool ssl;
 
+    enum ssl_source_t ssl_source;
+
     // Represents the syscall or function that produces this event.
     enum source_function_t source_fn;
 
@@ -218,8 +225,10 @@ struct conn_stats_event_t {
 
   struct conn_id_t conn_id;
 
+  // IP address of the local endpoint.
+  union sockaddr_t laddr;
   // IP address of the remote endpoint.
-  union sockaddr_t addr;
+  union sockaddr_t raddr;
 
   // The server-client role.
   enum endpoint_role_t role;
@@ -254,6 +263,7 @@ struct socket_control_event_t {
 
 struct connect_args_t {
   const struct sockaddr* addr;
+  const struct sock* connect_sock;
   int32_t fd;
 };
 
@@ -281,6 +291,9 @@ struct data_args_t {
 
   // For sendmmsg()
   unsigned int* msg_len;
+
+  // For SSL_write_ex and SSL_read_ex
+  size_t* ssl_ex_len;
 };
 
 struct close_args_t {
@@ -291,4 +304,11 @@ struct sendfile_args_t {
   int32_t out_fd;
   int32_t in_fd;
   size_t count;
+};
+
+static const uint32_t kOpenSSLTraceStatusIdx = 0;
+
+enum openssl_trace_errors_t {
+  kOpenSSLTraceOk = 0,
+  kOpenSSLMismatchedFDsDetected,
 };

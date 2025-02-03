@@ -14,7 +14,8 @@ spec:
     spec:
       containers:
       - name: slackin-server
-        image: gcr.io/pixie-oss/pixie-prod/slackin/slackin-server:20201222_1
+        # yamllint disable-line rule:line-length
+        image: ghcr.io/pixie-io/slackin:0.1.0@sha256:6811d908c353b4bacb3108d853e60e7b98149a7f6e71c110c2d212e58632271b
         ports:
         - containerPort: 58000
         readinessProbe:

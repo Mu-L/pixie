@@ -45,6 +45,8 @@ void RegisterMetadataOpsOrDie(px::carnot::udf::Registry* registry) {
   registry->RegisterOrDie<HasServiceNameUDF>("has_service_name");
   registry->RegisterOrDie<HasValueUDF>("has_value");
   registry->RegisterOrDie<IPToPodIDUDF>("ip_to_pod_id");
+  registry->RegisterOrDie<UPIDtoPodNameLocalAddrFallback>("_upid_to_podname_local_addr_fallback");
+  registry->RegisterOrDie<IPToPodIDAtTimeUDF>("ip_to_pod_id");
   registry->RegisterOrDie<PodIDToPodNameUDF>("pod_id_to_pod_name");
   registry->RegisterOrDie<PodIDToPodLabelsUDF>("pod_id_to_pod_labels");
   registry->RegisterOrDie<PodIDToNamespaceUDF>("pod_id_to_namespace");
@@ -128,7 +130,9 @@ void RegisterMetadataOpsOrDie(px::carnot::udf::Registry* registry) {
   registry->RegisterOrDie<HostNumCPUsUDF>("_exec_host_num_cpus");
   registry->RegisterOrDie<VizierIDUDF>("vizier_id");
   registry->RegisterOrDie<VizierNameUDF>("vizier_name");
+  registry->RegisterOrDie<VizierNamespaceUDF>("vizier_namespace");
   registry->RegisterOrDie<GetClusterCIDRRangeUDF>("get_cidrs");
+  registry->RegisterOrDie<NamespaceNameToNamespaceIDUDF>("namespace_name_to_namespace_id");
 
   /*****************************************
    * Aggregate UDFs.

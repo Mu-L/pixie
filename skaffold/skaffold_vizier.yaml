@@ -3,37 +3,37 @@ apiVersion: skaffold/v4beta1
 kind: Config
 build:
   artifacts:
-  - image: gcr.io/pixie-oss/pixie-dev/vizier/pem_image
+  - image: vizier-pem_image
     context: .
     bazel:
       target: //src/vizier/services/agent/pem:pem_image.tar
       args:
       - --compilation_mode=dbg
-  - image: gcr.io/pixie-oss/pixie-dev/vizier/kelvin_image
+  - image: vizier-kelvin_image
     context: .
     bazel:
       target: //src/vizier/services/agent/kelvin:kelvin_image.tar
       args:
       - --compilation_mode=dbg
-  - image: gcr.io/pixie-oss/pixie-dev/vizier/metadata_server_image
+  - image: vizier-metadata_server_image
     context: .
     bazel:
       target: //src/vizier/services/metadata:metadata_server_image.tar
       args:
       - --compilation_mode=dbg
-  - image: gcr.io/pixie-oss/pixie-dev/vizier/query_broker_server_image
+  - image: vizier-query_broker_server_image
     context: .
     bazel:
       target: //src/vizier/services/query_broker:query_broker_server_image.tar
       args:
       - --compilation_mode=dbg
-  - image: gcr.io/pixie-oss/pixie-dev/vizier/cloud_connector_server_image
+  - image: vizier-cloud_connector_server_image
     context: .
     bazel:
       target: //src/vizier/services/cloud_connector:cloud_connector_server_image.tar
       args:
       - --compilation_mode=dbg
-  - image: gcr.io/pixie-oss/pixie-dev/vizier/cert_provisioner_image
+  - image: vizier-cert_provisioner_image
     context: .
     bazel:
       target: //src/utils/cert_provisioner:cert_provisioner_image.tar
@@ -46,7 +46,7 @@ build:
 manifests:
   kustomize:
     paths:
-    - k8s/vizier/persistent_metadata
+    - k8s/vizier/persistent_metadata/x86
 profiles:
 - name: minikube
   activation:
@@ -68,18 +68,6 @@ profiles:
     path: /build/artifacts/context=./bazel/args
     value:
     - --compilation_mode=opt
-- name: jsyms
-  patches:
-  - op: add
-    path: /manifests/kustomize/paths
-    value:
-    - k8s/vizier/jsyms
-- name: no-jsyms
-  patches:
-  - op: add
-    path: /manifests/kustomize/paths
-    value:
-    - k8s/vizier/no-jsyms
 - name: heap
   patches:
   - op: add
@@ -119,4 +107,40 @@ profiles:
   - op: replace
     path: /manifests/kustomize/paths
     value:
-    - k8s/vizier/etcd_metadata
+    - k8s/vizier/etcd_metadata/x86
+- name: etcd_x86_64_sysroot
+  patches:
+  - op: add
+    path: /build/artifacts/context=./bazel/args
+    value:
+    - --config=x86_64_sysroot
+  - op: replace
+    path: /manifests/kustomize/paths
+    value:
+    - k8s/vizier/etcd_metadata/x86
+- name: etcd_aarch64_sysroot
+  patches:
+  - op: add
+    path: /build/artifacts/context=./bazel/args
+    value:
+    - --config=aarch64_sysroot
+  - op: replace
+    path: /manifests/kustomize/paths
+    value:
+    - k8s/vizier/etcd_metadata/aarch64
+- name: aarch64_sysroot
+  patches:
+  - op: add
+    path: /build/artifacts/context=./bazel/args
+    value:
+    - --config=aarch64_sysroot
+  - op: replace
+    path: /manifests/kustomize/paths
+    value:
+    - k8s/vizier/persistent_metadata/aarch64
+- name: x86_64_sysroot
+  patches:
+  - op: add
+    path: /build/artifacts/context=./bazel/args
+    value:
+    - --config=x86_64_sysroot

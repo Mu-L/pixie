@@ -63,7 +63,7 @@ class ASTExpressionTest : public ::testing::Test {
     info_ = std::make_shared<RegistryInfo>();
     udfspb::UDFInfo info_pb;
     google::protobuf::TextFormat::MergeFromString(kRegInfoProto, &info_pb);
-    PL_CHECK_OK(info_->Init(info_pb));
+    PX_CHECK_OK(info_->Init(info_pb));
     compiler_state_ = std::make_unique<CompilerState>(
         std::make_unique<RelationMap>(), /* sensitive_columns */ SensitiveColumnMap{}, info_.get(),
         /* time_now */ time_now_,
@@ -74,7 +74,7 @@ class ASTExpressionTest : public ::testing::Test {
     auto ast_visitor_impl = ASTVisitorImpl::Create(graph.get(), &dynamic_trace_,
                                                    compiler_state_.get(), &module_handler_)
                                 .ConsumeValueOrDie();
-    PL_CHECK_OK(ast_visitor_impl->AddPixieModule());
+    PX_CHECK_OK(ast_visitor_impl->AddPixieModule());
     ast_visitor = ast_visitor_impl;
   }
   std::shared_ptr<RegistryInfo> info_;
@@ -115,6 +115,66 @@ TEST_F(ASTExpressionTest, Integer) {
 
   ASSERT_MATCH(expr, Int());
   EXPECT_EQ(static_cast<IntIR*>(expr)->val(), 1);
+}
+
+TEST_F(ASTExpressionTest, NegativeInteger) {
+  auto parse_result = parser.Parse("-1", /* parse_doc_strings */ false);
+  auto visitor_result =
+      ast_visitor->ProcessSingleExpressionModule(parse_result.ConsumeValueOrDie());
+
+  ASSERT_OK(visitor_result);
+
+  auto obj = visitor_result.ConsumeValueOrDie();
+  ASSERT_TRUE(ExprObject::IsExprObject(obj));
+  auto expr = static_cast<ExprObject*>(obj.get())->expr();
+
+  ASSERT_MATCH(expr, Int());
+  EXPECT_EQ(static_cast<IntIR*>(expr)->val(), -1);
+}
+
+TEST_F(ASTExpressionTest, NegativeFloat) {
+  auto parse_result = parser.Parse("-1.0", /* parse_doc_strings */ false);
+  auto visitor_result =
+      ast_visitor->ProcessSingleExpressionModule(parse_result.ConsumeValueOrDie());
+
+  ASSERT_OK(visitor_result);
+
+  auto obj = visitor_result.ConsumeValueOrDie();
+  ASSERT_TRUE(ExprObject::IsExprObject(obj));
+  auto expr = static_cast<ExprObject*>(obj.get())->expr();
+
+  ASSERT_MATCH(expr, Float());
+  EXPECT_EQ(static_cast<FloatIR*>(expr)->val(), -1);
+}
+
+TEST_F(ASTExpressionTest, NegativeLong) {
+  auto parse_result = parser.Parse("-2305843009213693952", /* parse_doc_strings */ false);
+  auto visitor_result =
+      ast_visitor->ProcessSingleExpressionModule(parse_result.ConsumeValueOrDie());
+
+  ASSERT_OK(visitor_result);
+
+  auto obj = visitor_result.ConsumeValueOrDie();
+  ASSERT_TRUE(ExprObject::IsExprObject(obj));
+  auto expr = static_cast<ExprObject*>(obj.get())->expr();
+
+  ASSERT_MATCH(expr, Int());
+  EXPECT_EQ(static_cast<IntIR*>(expr)->val(), -2305843009213693952);
+}
+
+TEST_F(ASTExpressionTest, InvertInteger) {
+  auto parse_result = parser.Parse("~1", /* parse_doc_strings */ false);
+  auto visitor_result =
+      ast_visitor->ProcessSingleExpressionModule(parse_result.ConsumeValueOrDie());
+
+  ASSERT_OK(visitor_result);
+
+  auto obj = visitor_result.ConsumeValueOrDie();
+  ASSERT_TRUE(ExprObject::IsExprObject(obj));
+  auto expr = static_cast<ExprObject*>(obj.get())->expr();
+
+  ASSERT_MATCH(expr, Int());
+  EXPECT_EQ(static_cast<IntIR*>(expr)->val(), -2);
 }
 
 TEST_F(ASTExpressionTest, PLModule) {

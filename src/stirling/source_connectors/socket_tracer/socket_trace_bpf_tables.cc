@@ -35,8 +35,8 @@ DEFINE_uint32(stirling_conn_map_cleanup_threshold, kMaxConnMapCleanupItems,
 // We declare this with C linkage (extern "C") so it has a simple symbol name.
 extern "C" {
 NO_OPT_ATTR void ConnInfoMapCleanupTrigger(int n, struct conn_id_t* conn_id_vec) {
-  PL_UNUSED(n);
-  PL_UNUSED(conn_id_vec);
+  PX_UNUSED(n);
+  PX_UNUSED(conn_id_vec);
   return;
 }
 }
@@ -44,11 +44,12 @@ NO_OPT_ATTR void ConnInfoMapCleanupTrigger(int n, struct conn_id_t* conn_id_vec)
 namespace px {
 namespace stirling {
 
+using px::stirling::bpf_tools::WrappedBCCMap;
 using px::system::ProcPidPath;
 
 ConnInfoMapManager::ConnInfoMapManager(bpf_tools::BCCWrapper* bcc)
-    : conn_info_map_(bcc->GetHashTable<uint64_t, struct conn_info_t>("conn_info_map")),
-      conn_disabled_map_(bcc->GetHashTable<uint64_t, uint64_t>("conn_disabled_map")) {
+    : conn_info_map_(WrappedBCCMap<uint64_t, struct conn_info_t>::Create(bcc, "conn_info_map")),
+      conn_disabled_map_(WrappedBCCMap<uint64_t, uint64_t>::Create(bcc, "conn_disabled_map")) {
   std::filesystem::path self_path = GetSelfPath().ValueOrDie();
   auto elf_reader_or_s = obj_tools::ElfReader::Create(self_path.string());
   if (!elf_reader_or_s.ok()) {
@@ -74,7 +75,7 @@ ConnInfoMapManager::ConnInfoMapManager(bpf_tools::BCCWrapper* bcc)
                                .attach_type = bpf_tools::BPFProbeAttachType::kEntry,
                                .probe_fn = "conn_cleanup_uprobe"};
 
-  PL_CHECK_OK(bcc->AttachUProbe(uprobe));
+  PX_CHECK_OK(bcc->AttachUProbe(uprobe));
 }
 
 void ConnInfoMapManager::ReleaseResources(struct conn_id_t conn_id) {
@@ -89,13 +90,13 @@ void ConnInfoMapManager::ReleaseResources(struct conn_id_t conn_id) {
 void ConnInfoMapManager::Disable(struct conn_id_t conn_id) {
   uint64_t key = id(conn_id);
 
-  if (!conn_disabled_map_.update_value(key, conn_id.tsid).ok()) {
+  if (!conn_disabled_map_->SetValue(key, conn_id.tsid).ok()) {
     VLOG(1) << absl::Substitute("$0 Updating conn_disable_map entry failed.", ToString(conn_id));
   }
 }
 
 void ConnInfoMapManager::CleanupBPFMapLeaks(ConnTrackersManager* conn_trackers_mgr) {
-  for (const auto& [pid_fd, conn_info] : conn_info_map_.get_table_offline()) {
+  for (const auto& [pid_fd, conn_info] : conn_info_map_->GetTableOffline()) {
     uint32_t pid = pid_fd >> 32;
     int32_t fd = pid_fd;
 
@@ -113,7 +114,7 @@ void ConnInfoMapManager::CleanupBPFMapLeaks(ConnTrackersManager* conn_trackers_m
 
     ReleaseResources(conn_info.conn_id);
     VLOG(1) << absl::Substitute("Found conn_info_map leak: pid=$0 fd=$1 af=$2", pid, fd,
-                                conn_info.addr.sa.sa_family);
+                                conn_info.raddr.sa.sa_family);
   }
 }
 

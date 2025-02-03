@@ -26,12 +26,13 @@
 #include <thread>
 
 #include "src/common/exec/subprocess.h"
+#include "src/common/system/kernel_version.h"
 #include "src/common/system/proc_pid_path.h"
 #include "src/common/testing/testing.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/http2/grpc.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/http2/testing/greeter_server.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/http2/testing/proto/greet.grpc.pb.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/py_grpc_hello_world_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/source_connectors/socket_tracer/uprobe_manager.h"
 #include "src/stirling/testing/common.h"
@@ -49,7 +50,7 @@ using ::testing::HasSubstr;
 using ::testing::StrEq;
 
 StatusOr<md::UPID> ToUPID(uint32_t pid) {
-  PL_ASSIGN_OR_RETURN(int64_t pid_start_time, system::GetPIDStartTimeTicks(ProcPidPath(pid)));
+  PX_ASSIGN_OR_RETURN(int64_t pid_start_time, system::GetPIDStartTimeTicks(ProcPidPath(pid)));
   return md::UPID{/* asid */ 0, pid, pid_start_time};
 }
 
@@ -70,14 +71,14 @@ class GRPCServer {
     // Let server pick random port in order avoid conflicting.
     const std::string port_flag = "--port=0";
 
-    PL_CHECK_OK(s_.Start({server_path, https_flag, port_flag}));
+    PX_CHECK_OK(s_.Start({server_path, https_flag, port_flag}));
     LOG(INFO) << "Server PID: " << s_.child_pid();
 
     // Give some time for the server to start up.
     sleep(2);
 
     std::string port_str;
-    PL_CHECK_OK(s_.Stdout(&port_str));
+    PX_CHECK_OK(s_.Stdout(&port_str));
     CHECK(absl::SimpleAtoi(port_str, &port_));
     CHECK_NE(0, port_);
   }
@@ -104,7 +105,7 @@ class GRPCClient {
     const std::string https_flag = use_https ? "--https=true" : "--https=false";
     const std::string compression_flag =
         use_compression ? "--compression=true" : "--compression=false";
-    PL_CHECK_OK(c_.Start({client_path, https_flag, compression_flag, "-once", "-name=PixieLabs",
+    PX_CHECK_OK(c_.Start({client_path, https_flag, compression_flag, "-once", "-name=PixieLabs",
                           absl::StrCat("-address=localhost:", port)}));
     LOG(INFO) << "Client PID: " << c_.child_pid();
     CHECK_EQ(0, c_.Wait());
@@ -119,12 +120,14 @@ struct TestParams {
   bool use_https;
 };
 
-class GRPCTraceTest : public testing::SocketTraceBPFTestFixture</* TClientSideTracing */ false>,
-                      public ::testing::WithParamInterface<TestParams> {
+using TestFixture = testing::SocketTraceBPFTestFixture</* TClientSideTracing */ false>;
+
+class GRPCTraceTest : public TestFixture, public ::testing::WithParamInterface<TestParams> {
  protected:
   GRPCTraceTest() {}
 
   void TearDown() override {
+    TestFixture::TearDown();
     server_.s_.Kill();
     CHECK_EQ(9, server_.s_.Wait()) << "Server should have been killed.";
   }
@@ -136,7 +139,7 @@ class GRPCTraceTest : public testing::SocketTraceBPFTestFixture</* TClientSideTr
 TEST_P(GRPCTraceTest, CaptureRPCTraceRecord) {
   auto params = GetParam();
 
-  PL_SET_FOR_SCOPE(FLAGS_socket_tracer_enable_http2_gzip, params.use_compression);
+  PX_SET_FOR_SCOPE(FLAGS_socket_tracer_enable_http2_gzip, params.use_compression);
   server_.LaunchServer(params.go_version, params.use_https);
 
   // Deploy uprobes on the newly launched server.
@@ -190,7 +193,10 @@ INSTANTIATE_TEST_SUITE_P(SecurityModeTest, GRPCTraceTest,
                              TestParams{"1_16", true, true}, TestParams{"1_16", true, false},
                              TestParams{"1_17", false, true}, TestParams{"1_17", false, false},
                              TestParams{"1_18", false, true}, TestParams{"1_18", true, false},
-                             TestParams{"1_19", false, false}, TestParams{"1_19", true, true}));
+                             TestParams{"1_19", false, false}, TestParams{"1_19", true, true},
+                             TestParams{"1_20", true, true}, TestParams{"1_20", true, false},
+                             TestParams{"1_21", true, true}, TestParams{"1_21", true, false},
+                             TestParams{"boringcrypto", true, true}));
 
 class PyGRPCTraceTest : public testing::SocketTraceBPFTestFixture</* TClientSideTracing */ false> {
  protected:
@@ -205,10 +211,10 @@ class PyGRPCTraceTest : public testing::SocketTraceBPFTestFixture</* TClientSide
 
 // Test that socket tracker can trace Python gRPC server's message.
 TEST_F(PyGRPCTraceTest, VerifyTraceRecords) {
-  ASSERT_OK_AND_ASSIGN(const utils::KernelVersion kernel_version, utils::GetKernelVersion());
-  const utils::KernelVersion kKernelVersion5_3 = {5, 3, 0};
-  if (utils::CompareKernelVersions(kernel_version, kKernelVersion5_3) ==
-      utils::KernelVersionOrder::kOlder) {
+  ASSERT_OK_AND_ASSIGN(const system::KernelVersion kernel_version, system::GetKernelVersion());
+  const system::KernelVersion kKernelVersion5_3 = {5, 3, 0};
+  if (system::CompareKernelVersions(kernel_version, kKernelVersion5_3) ==
+      system::KernelVersionOrder::kOlder) {
     LOG(WARNING) << absl::Substitute(
         "Skipping because host kernel version $0 is older than $1, "
         "old kernel versions do not support bounded loops, which is required by grpc_c_trace.c",
@@ -222,9 +228,9 @@ TEST_F(PyGRPCTraceTest, VerifyTraceRecords) {
   testing::PyGRPCHelloWorld server;
 
   // First start the server so the process can be detected by socket tracer.
-  PL_CHECK_OK(server.Run(std::chrono::seconds{60}, /*options*/ {},
+  PX_CHECK_OK(server.Run(std::chrono::seconds{60}, /*options*/ {},
                          /*args*/ {"python", "helloworld/greeter_server.py"}));
-  PL_CHECK_OK(
+  PX_CHECK_OK(
       client.Run(std::chrono::seconds{60},
                  /*options*/ {absl::Substitute("--network=container:$0", server.container_name())},
                  /*args*/ {"python", "helloworld/greeter_client.py"}));

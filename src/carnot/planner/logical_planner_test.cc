@@ -54,6 +54,19 @@ class LogicalPlannerTest : public ::testing::Test {
     *query_request.mutable_logical_planner_state() = state;
     return query_request;
   }
+  plannerpb::QueryRequest MakeQueryRequestWithExecArgs(
+      const distributedpb::LogicalPlannerState& state, const std::string& query,
+      const std::vector<std::string>& exec_funcs) {
+    plannerpb::QueryRequest query_request;
+    query_request.set_query_str(query);
+    *query_request.mutable_logical_planner_state() = state;
+    for (const auto& exec_func : exec_funcs) {
+      auto f = query_request.add_exec_funcs();
+      f->set_func_name(exec_func);
+      f->set_output_table_prefix(exec_func);
+    }
+    return query_request;
+  }
   udfspb::UDFInfo info_;
 };
 
@@ -272,6 +285,24 @@ TEST_F(LogicalPlannerTest, AppendSelfTest) {
   EXPECT_OK(plan->ToProto());
 }
 
+constexpr char kAgentStatusQuery[] = R"pxl(
+import px
+
+# GetAgentStatus takes an include_kelvin argument. This defaults to True
+# to preserve backwards compatibility.
+px.display(px.GetAgentStatus())
+)pxl";
+
+TEST_F(LogicalPlannerTest, UDTFDefaultArgumentTest) {
+  auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
+  auto plan_or_s = planner->Plan(
+      MakeQueryRequest(testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema),
+                       kAgentStatusQuery));
+  EXPECT_OK(plan_or_s);
+  auto plan = plan_or_s.ConsumeValueOrDie();
+  EXPECT_OK(plan->ToProto());
+}
+
 constexpr char kPlannerQueryError[] = R"pxl(
 import px
 
@@ -373,6 +404,85 @@ TEST_F(LogicalPlannerTest, PlanWithExecFuncs) {
   EXPECT_OK(plan->ToProto());
 }
 
+constexpr char kBPFTraceProgramMaxKernel[] = R"bpftrace(
+kprobe:tcp_drop
+{
+  ...
+}
+)bpftrace";
+
+constexpr char kBPFTraceProgramMinKernel[] = R"bpftrace(
+tracepoint:skb:kfree_skb
+{
+  ...
+}
+)bpftrace";
+
+constexpr char kTwoTraceProgramsPxl[] = R"pxl(
+import pxtrace
+import px
+
+before_518_trace_program = pxtrace.TraceProgram(
+  program="""$0""",
+  max_kernel='5.18',
+)
+
+after_519_trace_program = pxtrace.TraceProgram(
+  program="""$1""",
+  min_kernel='5.19',
+)
+
+table_name = 'tcp_drop_table'
+pxtrace.UpsertTracepoint('tcp_drop_tracer',
+                          table_name,
+                          [before_518_trace_program, after_519_trace_program],
+                          pxtrace.kprobe(),
+                          '10m')
+)pxl";
+
+constexpr char kBPFTwoTraceProgramsPb[] = R"proto(
+name: "tcp_drop_tracer"
+ttl {
+  seconds: 600
+}
+programs {
+  table_name: "tcp_drop_table"
+  bpftrace {
+    program: "\nkprobe:tcp_drop\n{\n  ...\n}\n"
+  }
+  selectors {
+    selector_type: MAX_KERNEL
+    value: "5.18"
+  }
+}
+programs {
+  table_name: "tcp_drop_table"
+  bpftrace {
+    program: "\ntracepoint:skb:kfree_skb\n{\n  ...\n}\n"
+  }
+  selectors {
+    selector_type: MIN_KERNEL
+    value: "5.19"
+  }
+}
+)proto";
+
+TEST_F(LogicalPlannerTest, CompileTwoTracePrograms) {
+  auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
+  plannerpb::CompileMutationsRequest req;
+  req.set_query_str(
+      absl::Substitute(kTwoTraceProgramsPxl, kBPFTraceProgramMaxKernel, kBPFTraceProgramMinKernel));
+  *req.mutable_logical_planner_state() =
+      testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema);
+  auto trace_ir_or_s = planner->CompileTrace(req);
+  ASSERT_OK(trace_ir_or_s);
+  auto trace_ir = trace_ir_or_s.ConsumeValueOrDie();
+  plannerpb::CompileMutationsResponse resp;
+  ASSERT_OK(trace_ir->ToProto(&resp));
+  ASSERT_EQ(resp.mutations_size(), 1);
+  EXPECT_THAT(resp.mutations()[0].trace(), EqualsProto(kBPFTwoTraceProgramsPb));
+}
+
 constexpr char kSingleProbePxl[] = R"pxl(
 import pxtrace
 import px
@@ -391,7 +501,7 @@ pxtrace.UpsertTracepoint('http_return',
                          "5m")
 )pxl";
 
-constexpr char kSingleProbeProgramPb[] = R"pxl(
+constexpr char kSingleProbeProgramPb[] = R"proto(
 name: "http_return"
 ttl {
   seconds: 300
@@ -435,7 +545,7 @@ programs {
     }
   }
 }
-)pxl";
+)proto";
 
 TEST_F(LogicalPlannerTest, CompileTrace) {
   auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
@@ -671,6 +781,130 @@ TEST_F(LogicalPlannerTest, filter_pushdown_bug) {
   auto state = testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema);
   ASSERT_OK_AND_ASSIGN(auto plan, planner->Plan(MakeQueryRequest(state, kFilterPushDownBugQuery)));
   ASSERT_OK(plan->ToProto());
+}
+
+const char kPodNameFallbackConversion[] = R"pxl(
+import px
+
+df = px.DataFrame(table='http_events', start_time='-6m')
+df.pod = df.ctx['pod']
+
+px.display(df)
+)pxl";
+TEST_F(LogicalPlannerTest, pod_name_fallback_conversion) {
+  auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
+  auto state = testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema);
+  ASSERT_OK_AND_ASSIGN(auto plan,
+                       planner->Plan(MakeQueryRequest(state, kPodNameFallbackConversion)));
+  ASSERT_OK(plan->ToProto());
+}
+
+const char kPodNameFallbackConversionWithFilter[] = R"pxl(
+import px
+
+df = px.DataFrame(table='http_events', start_time='-6m')
+df[df.ctx['pod'] != ""]
+
+px.display(df)
+)pxl";
+TEST_F(LogicalPlannerTest, pod_name_fallback_conversion_with_filter) {
+  auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
+  auto state = testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema);
+  ASSERT_OK_AND_ASSIGN(
+      auto plan, planner->Plan(MakeQueryRequest(state, kPodNameFallbackConversionWithFilter)));
+  ASSERT_OK(plan->ToProto());
+}
+
+// Use a data table that doesn't contain local_addr to test df.ctx['pod'] conversion without
+// the fallback conversion.
+const char kPodNameConversionWithoutFallback[] = R"pxl(
+import px
+
+def cql_flow_graph():
+    df = px.DataFrame('cql_events', start_time='-5m')
+    df.pod = df.ctx['pod']
+
+    df.ra_pod = px.pod_id_to_pod_name(px.ip_to_pod_id(df.remote_addr))
+    df.is_ra_pod = df.ra_pod != ''
+    df.ra_name = px.select(df.is_ra_pod, df.ra_pod, df.remote_addr)
+
+    df.is_server_tracing = df.trace_role == 2
+
+    df.source = px.select(df.is_server_tracing, df.ra_name, df.pod)
+    df.destination = px.select(df.is_server_tracing, df.pod, df.ra_name)
+
+    return df
+
+
+def cql_summary_with_links():
+    df = cql_flow_graph()
+
+    return df
+)pxl";
+TEST_F(LogicalPlannerTest, pod_name_conversion_without_fallback) {
+  auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
+  auto state = testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema);
+  ASSERT_OK_AND_ASSIGN(auto plan, planner->Plan(MakeQueryRequestWithExecArgs(
+                                      state, kPodNameConversionWithoutFallback,
+                                      {"cql_flow_graph", "cql_summary_with_links"})));
+  ASSERT_OK(plan->ToProto());
+}
+
+const char kHttpDataScript[] = R"pxl(
+import px
+
+
+def http_data(start_time: str, source_filter: str, destination_filter: str, num_head: int):
+
+    df = px.DataFrame(table='http_events', start_time=start_time)
+
+    # Add context.
+    df.node = df.ctx['node']
+    df.pid = px.upid_to_pid(df.upid)
+
+    # Filter out entities as specified by the user.
+    df = df[px.contains("source", source_filter)]
+    df = df[px.contains("destination", destination_filter)]
+
+    # Add additional filters below:
+
+    # Restrict number of results.
+    df = df.head(num_head)
+
+    # Order columns.
+
+    return df
+)pxl";
+
+TEST_F(LogicalPlannerTest, VerifyEmptyContainsCallsDoNotSegFaultTest) {
+  auto planner = LogicalPlanner::Create(info_).ConsumeValueOrDie();
+  plannerpb::QueryRequest req;
+  req.set_query_str(kHttpDataScript);
+  auto f = req.add_exec_funcs();
+  f->set_func_name("http_data");
+  f->set_output_table_prefix("http_data");
+  auto start_time = f->add_arg_values();
+  start_time->set_name("start_time");
+  start_time->set_value("-5m");
+
+  auto source_filter = f->add_arg_values();
+  source_filter->set_name("source_filter");
+  source_filter->set_value("");
+
+  auto dest_filter = f->add_arg_values();
+  dest_filter->set_name("destination_filter");
+  dest_filter->set_value("");
+
+  auto num_head = f->add_arg_values();
+  num_head->set_name("num_head");
+  num_head->set_value("1000");
+
+  *req.mutable_logical_planner_state() =
+      testutils::CreateTwoPEMsOneKelvinPlannerState(testutils::kHttpEventsSchema);
+  auto plan_or_s = planner->Plan(req);
+  ASSERT_OK(plan_or_s);
+  auto plan = plan_or_s.ConsumeValueOrDie();
+  EXPECT_OK(plan->ToProto());
 }
 
 TEST_F(LogicalPlannerTest, create_compiler_state_has_endpoint_config) {

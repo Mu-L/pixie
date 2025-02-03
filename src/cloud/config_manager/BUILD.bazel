@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary", "pl_go_image")
 
@@ -35,15 +34,6 @@ pl_go_image(
     ],
 )
 
-container_push(
-    name = "push_config_manager_server_image",
-    format = "Docker",
-    image = ":config_manager_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/cloud/config_manager_server_image",
-    tag = "{STABLE_BUILD_TAG}",
-)
-
 go_library(
     name = "config_manager_lib",
     srcs = ["config_manager_server.go"],
@@ -57,12 +47,9 @@ go_library(
         "//src/shared/services/env",
         "//src/shared/services/healthz",
         "//src/shared/services/server",
-        "//src/utils/shared/k8s",
         "@com_github_sirupsen_logrus//:logrus",
         "@com_github_spf13_pflag//:pflag",
         "@com_github_spf13_viper//:viper",
-        "@io_k8s_client_go//rest",
-        "@io_k8s_client_go//restmapper",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
     ],
 )

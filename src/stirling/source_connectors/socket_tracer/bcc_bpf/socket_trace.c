@@ -35,7 +35,7 @@
 #include "src/stirling/upid/upid.h"
 
 // This keeps instruction count below BPF's limit of 4096 per probe.
-#define LOOP_LIMIT 42
+#define LOOP_LIMIT BPF_LOOP_LIMIT
 #define PROTOCOL_VEC_LIMIT 3
 
 const int32_t kInvalidFD = -1;
@@ -81,6 +81,11 @@ BPF_HASH(active_accept_args_map, uint64_t, struct accept_args_t);
 // Key is {tgid, pid}.
 BPF_HASH(active_connect_args_map, uint64_t, struct connect_args_t);
 
+// Map from thread to its sock* struct. This facilitates capturing
+// the local address of a tcp socket during connect() syscalls.
+// Key is {tgid, pid}.
+BPF_HASH(tcp_connect_args_map, uint64_t, struct sock*);
+
 // Map from thread to its ongoing write() syscall's input argument.
 // Tracks write() call from entry -> exit.
 // Key is {tgid, pid}.
@@ -90,6 +95,19 @@ BPF_HASH(active_write_args_map, uint64_t, struct data_args_t);
 // Tracks read() call from entry -> exit.
 // Key is {tgid, pid}.
 BPF_HASH(active_read_args_map, uint64_t, struct data_args_t);
+
+struct nested_syscall_fd_t {
+  int fd;
+  bool mismatched_fds;
+};
+
+// Map used to verify if SSL_write or SSL_read are on the stack during a syscall in
+// order to propagate the socket fd back to the SSL_write and SSL_read return probes.
+// Key is pid tgid.
+// Value is nested_syscall_fd struct.
+BPF_HASH(ssl_user_space_call_map, uint64_t, struct nested_syscall_fd_t);
+
+BPF_HASH(openssl_source_map, uint32_t, enum ssl_source_t);
 
 // Map from thread to its ongoing close() syscall's input argument.
 // Tracks close() call from entry -> exit.
@@ -129,7 +147,8 @@ static __inline void init_conn_info(uint32_t tgid, int32_t fd, struct conn_info_
   init_conn_id(tgid, fd, &conn_info->conn_id);
   // NOTE: BCC code defaults to 0, because kRoleUnknown is not 0, must explicitly initialize.
   conn_info->role = kRoleUnknown;
-  conn_info->addr.sa.sa_family = PX_AF_UNKNOWN;
+  conn_info->laddr.sa.sa_family = PX_AF_UNKNOWN;
+  conn_info->raddr.sa.sa_family = PX_AF_UNKNOWN;
 }
 
 // Be careful calling this function. The automatic creation of BPF map entries can result in a
@@ -143,12 +162,44 @@ static __inline struct conn_info_t* get_or_create_conn_info(uint32_t tgid, int32
   return conn_info_map.lookup_or_init(&tgid_fd, &new_conn_info);
 }
 
-static __inline void set_conn_as_ssl(uint32_t tgid, int32_t fd) {
+static __inline enum ssl_source_t get_ssl_source(uint32_t tgid) {
+  const enum ssl_source_t* ssl_source = openssl_source_map.lookup(&tgid);
+  if (ssl_source == NULL) {
+    return kSSLUnspecified;
+  }
+  return *ssl_source;
+}
+
+static __inline void set_conn_as_ssl(uint32_t tgid, int32_t fd, enum ssl_source_t ssl_source) {
   struct conn_info_t* conn_info = get_or_create_conn_info(tgid, fd);
   if (conn_info == NULL) {
     return;
   }
   conn_info->ssl = true;
+  conn_info->ssl_source = ssl_source;
+}
+
+// Writes the syscall fd to a BPF map key created by an active tls call (the SSL_write/SSL_read
+// probes and ensures that set_conn_as_ssl is called for the tgid and pid. The majority of syscall
+// probes should call this on function entry, however, there are certain probes which are
+// not exlusively used for networking (read/write/readev/writev) and therefore must defer
+// this fd propagation to its ret probe (where it can be validated it is socket related
+// first via sock_event).
+static __inline void propagate_fd_to_user_space_call(uint64_t pid_tgid, int fd) {
+  struct nested_syscall_fd_t* nested_syscall_fd_ptr = ssl_user_space_call_map.lookup(&pid_tgid);
+  if (nested_syscall_fd_ptr != NULL) {
+    int current_fd = nested_syscall_fd_ptr->fd;
+    if (current_fd == kInvalidFD) {
+      nested_syscall_fd_ptr->fd = fd;
+    } else if (current_fd != fd) {
+      // Found two different fds during a single SSL_write/SSL_read call. This invalidates
+      // our tls tracing assumptions and must be recorded.
+      nested_syscall_fd_ptr->mismatched_fds = true;
+    }
+
+    uint32_t tgid = pid_tgid >> 32;
+    set_conn_as_ssl(tgid, fd, get_ssl_source(tgid));
+  }
 }
 
 static __inline struct socket_data_event_t* fill_socket_data_event(
@@ -162,6 +213,7 @@ static __inline struct socket_data_event_t* fill_socket_data_event(
   event->attr.timestamp_ns = bpf_ktime_get_ns();
   event->attr.source_fn = src_fn;
   event->attr.ssl = conn_info->ssl;
+  event->attr.ssl_source = conn_info->ssl_source;
   event->attr.direction = direction;
   event->attr.conn_id = conn_info->conn_id;
   event->attr.protocol = conn_info->protocol;
@@ -181,7 +233,8 @@ static __inline struct conn_stats_event_t* fill_conn_stats_event(
   }
 
   event->conn_id = conn_info->conn_id;
-  event->addr = conn_info->addr;
+  event->laddr = conn_info->laddr;
+  event->raddr = conn_info->raddr;
   event->role = conn_info->role;
   event->wr_bytes = conn_info->wr_bytes;
   event->rd_bytes = conn_info->rd_bytes;
@@ -205,7 +258,7 @@ static __inline bool should_trace_conn(struct conn_info_t* conn_info) {
   // we only send connections on INET or UNKNOWN to user-space.
   // Also, it's very important to send the UNKNOWN cases to user-space,
   // otherwise we may have a BPF map leak from the earlier call to get_or_create_conn_info().
-  return should_trace_sockaddr_family(conn_info->addr.sa.sa_family);
+  return should_trace_sockaddr_family(conn_info->raddr.sa.sa_family);
 }
 
 // If this returns false, we still will trace summary stats.
@@ -266,7 +319,7 @@ static __inline void update_traffic_class(struct conn_info_t* conn_info,
   struct protocol_message_t inferred_protocol = infer_protocol(buf, count, conn_info);
 
   // Could not infer the traffic.
-  if (inferred_protocol.protocol == kProtocolUnknown || conn_info->protocol == kProtocolMongo) {
+  if (inferred_protocol.protocol == kProtocolUnknown) {
     return;
   }
 
@@ -297,39 +350,44 @@ static __inline void update_traffic_class(struct conn_info_t* conn_info,
  * Perf submit functions
  ***********************************************************/
 
-static __inline void read_sockaddr_kernel(struct conn_info_t* conn_info,
-                                          const struct socket* socket) {
-  // Use BPF_PROBE_READ_KERNEL_VAR since BCC cannot insert them as expected.
-  struct sock* sk = NULL;
-  BPF_PROBE_READ_KERNEL_VAR(sk, &socket->sk);
-
-  struct sock_common* sk_common = &sk->__sk_common;
+static __inline void read_sockaddr_kernel(struct conn_info_t* conn_info, const struct sock* sk) {
+  const struct sock_common* sk_common = &sk->__sk_common;
   uint16_t family = -1;
-  uint16_t port = -1;
+  uint16_t lport = -1;
+  uint16_t rport = -1;
 
   BPF_PROBE_READ_KERNEL_VAR(family, &sk_common->skc_family);
-  BPF_PROBE_READ_KERNEL_VAR(port, &sk_common->skc_dport);
+  BPF_PROBE_READ_KERNEL_VAR(lport, &sk_common->skc_num);
+  // skc_num is stored in host byte order. The rest of our user space processing
+  // assumes network byte order so convert it here.
+  lport = htons(lport);
+  BPF_PROBE_READ_KERNEL_VAR(rport, &sk_common->skc_dport);
 
-  conn_info->addr.sa.sa_family = family;
+  conn_info->laddr.sa.sa_family = family;
+  conn_info->raddr.sa.sa_family = family;
 
   if (family == AF_INET) {
-    conn_info->addr.in4.sin_port = port;
-    BPF_PROBE_READ_KERNEL_VAR(conn_info->addr.in4.sin_addr.s_addr, &sk_common->skc_daddr);
+    conn_info->laddr.in4.sin_port = lport;
+    conn_info->raddr.in4.sin_port = rport;
+    BPF_PROBE_READ_KERNEL_VAR(conn_info->laddr.in4.sin_addr.s_addr, &sk_common->skc_rcv_saddr);
+    BPF_PROBE_READ_KERNEL_VAR(conn_info->raddr.in4.sin_addr.s_addr, &sk_common->skc_daddr);
   } else if (family == AF_INET6) {
-    conn_info->addr.in6.sin6_port = port;
-    BPF_PROBE_READ_KERNEL_VAR(conn_info->addr.in6.sin6_addr, &sk_common->skc_v6_daddr);
+    conn_info->laddr.in6.sin6_port = lport;
+    conn_info->raddr.in6.sin6_port = rport;
+    BPF_PROBE_READ_KERNEL_VAR(conn_info->laddr.in6.sin6_addr, &sk_common->skc_v6_rcv_saddr);
+    BPF_PROBE_READ_KERNEL_VAR(conn_info->raddr.in6.sin6_addr, &sk_common->skc_v6_daddr);
   }
 }
 
 static __inline void submit_new_conn(struct pt_regs* ctx, uint32_t tgid, int32_t fd,
-                                     const struct sockaddr* addr, const struct socket* socket,
+                                     const struct sockaddr* addr, const struct sock* sock,
                                      enum endpoint_role_t role, enum source_function_t source_fn) {
   struct conn_info_t conn_info = {};
   init_conn_info(tgid, fd, &conn_info);
-  if (addr != NULL) {
-    conn_info.addr = *((union sockaddr_t*)addr);
-  } else if (socket != NULL) {
-    read_sockaddr_kernel(&conn_info, socket);
+  if (sock != NULL) {
+    read_sockaddr_kernel(&conn_info, sock);
+  } else if (addr != NULL) {
+    conn_info.raddr = *((union sockaddr_t*)addr);
   }
   conn_info.role = role;
 
@@ -339,7 +397,7 @@ static __inline void submit_new_conn(struct pt_regs* ctx, uint32_t tgid, int32_t
   // While we keep all sa_family types in conn_info_map,
   // we only send connections with supported protocols to user-space.
   // We use the same filter function to avoid sending data of unwanted connections as well.
-  if (!should_trace_sockaddr_family(conn_info.addr.sa.sa_family)) {
+  if (!should_trace_sockaddr_family(conn_info.raddr.sa.sa_family)) {
     return;
   }
 
@@ -348,7 +406,8 @@ static __inline void submit_new_conn(struct pt_regs* ctx, uint32_t tgid, int32_t
   control_event.timestamp_ns = bpf_ktime_get_ns();
   control_event.conn_id = conn_info.conn_id;
   control_event.source_fn = source_fn;
-  control_event.open.addr = conn_info.addr;
+  control_event.open.raddr = conn_info.raddr;
+  control_event.open.laddr = conn_info.laddr;
   control_event.open.role = conn_info.role;
 
   socket_control_events.perf_submit(ctx, &control_event, sizeof(struct socket_control_event_t));
@@ -529,6 +588,52 @@ int conn_cleanup_uprobe(struct pt_regs* ctx) {
   return 0;
 }
 
+// These probes are used to capture the *sock struct during client side tracing
+// of connect() syscalls. This is necessary to capture the socket's local address,
+// which is not accessible via the connect() and later syscalls.
+//
+// This function requires that the function being probed receives a struct sock* as its
+// first argument and that the active_connect_args_map is populated when this probe fires.
+// This means the function being probed must be part of the connect() syscall path or similar
+// syscall path.
+//
+// Using the struct sock* for capturing a socket's local address only works for TCP sockets.
+// The equivalent UDP functions (udp_v4_connect, udp_v6_connect and upd_sendmsg) always receive a
+// sock struct with a 0.0.0.0 or ::1 local address. This is deemed acceptable since our local
+// address population for server side tracing relies on accept/accept4, which only applies for TCP.
+//
+// int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
+// static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
+// int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size);
+int probe_entry_populate_active_connect_sock(struct pt_regs* ctx) {
+  uint64_t id = bpf_get_current_pid_tgid();
+
+  const struct connect_args_t* connect_args = active_connect_args_map.lookup(&id);
+  if (connect_args == NULL) {
+    return 0;
+  }
+  struct sock* sk = (struct sock*)PT_REGS_PARM1(ctx);
+  tcp_connect_args_map.update(&id, &sk);
+
+  return 0;
+}
+
+int probe_ret_populate_active_connect_sock(struct pt_regs* ctx) {
+  uint64_t id = bpf_get_current_pid_tgid();
+
+  struct sock** sk = tcp_connect_args_map.lookup(&id);
+  if (sk == NULL) {
+    return 0;
+  }
+  struct connect_args_t* connect_args = active_connect_args_map.lookup(&id);
+  if (connect_args != NULL) {
+    connect_args->connect_sock = *sk;
+  }
+
+  tcp_connect_args_map.delete(&id);
+  return 0;
+}
+
 /***********************************************************
  * BPF syscall processing functions
  ***********************************************************/
@@ -573,7 +678,8 @@ static __inline void process_syscall_connect(struct pt_regs* ctx, uint64_t id,
     return;
   }
 
-  submit_new_conn(ctx, tgid, args->fd, args->addr, /*socket*/ NULL, kRoleClient, kSyscallConnect);
+  submit_new_conn(ctx, tgid, args->fd, args->addr, args->connect_sock, kRoleClient,
+                  kSyscallConnect);
 }
 
 static __inline void process_syscall_accept(struct pt_regs* ctx, uint64_t id,
@@ -589,8 +695,11 @@ static __inline void process_syscall_accept(struct pt_regs* ctx, uint64_t id,
     return;
   }
 
-  submit_new_conn(ctx, tgid, ret_fd, args->addr, args->sock_alloc_socket, kRoleServer,
-                  kSyscallAccept);
+  const struct sock* sk = NULL;
+  if (args->sock_alloc_socket != NULL) {
+    BPF_PROBE_READ_KERNEL_VAR(sk, &args->sock_alloc_socket->sk);
+  }
+  submit_new_conn(ctx, tgid, ret_fd, args->addr, sk, kRoleServer, kSyscallAccept);
 }
 
 // TODO(oazizi): This is badly broken (but better than before).
@@ -634,7 +743,7 @@ static __inline void process_implicit_conn(struct pt_regs* ctx, uint64_t id,
     return;
   }
 
-  submit_new_conn(ctx, tgid, args->fd, args->addr, /*socket*/ NULL, kRoleUnknown, source_fn);
+  submit_new_conn(ctx, tgid, args->fd, args->addr, args->connect_sock, kRoleUnknown, source_fn);
 }
 
 static __inline bool should_send_data(uint32_t tgid, uint64_t conn_disabled_tsid,
@@ -877,7 +986,7 @@ static __inline void process_syscall_close(struct pt_regs* ctx, uint64_t id,
 
   // Only submit event to user-space if there was a corresponding open or data event reported.
   // This is to avoid polluting the perf buffer.
-  if (should_trace_sockaddr_family(conn_info->addr.sa.sa_family) || conn_info->wr_bytes != 0 ||
+  if (should_trace_sockaddr_family(conn_info->raddr.sa.sa_family) || conn_info->wr_bytes != 0 ||
       conn_info->rd_bytes != 0) {
     submit_close_event(ctx, conn_info, kSyscallClose);
 
@@ -1009,6 +1118,10 @@ int syscall__probe_ret_write(struct pt_regs* ctx) {
   // Unstash arguments, and process syscall.
   struct data_args_t* write_args = active_write_args_map.lookup(&id);
   if (write_args != NULL && write_args->sock_event) {
+    // Syscalls that aren't exclusively used for networking must be
+    // validated to be a sock_event before propagating a socket fd to the
+    // tls tracing probes
+    propagate_fd_to_user_space_call(id, write_args->fd);
     process_syscall_data(ctx, id, kEgress, write_args, bytes_count);
   }
 
@@ -1019,6 +1132,8 @@ int syscall__probe_ret_write(struct pt_regs* ctx) {
 // ssize_t send(int sockfd, const void *buf, size_t len, int flags);
 int syscall__probe_entry_send(struct pt_regs* ctx, int sockfd, char* buf, size_t len) {
   uint64_t id = bpf_get_current_pid_tgid();
+
+  propagate_fd_to_user_space_call(id, sockfd);
 
   // Stash arguments.
   struct data_args_t write_args = {};
@@ -1065,6 +1180,10 @@ int syscall__probe_ret_read(struct pt_regs* ctx) {
   // Unstash arguments, and process syscall.
   struct data_args_t* read_args = active_read_args_map.lookup(&id);
   if (read_args != NULL && read_args->sock_event) {
+    // Syscalls that aren't exclusively used for networking must be
+    // validated to be a sock_event before propagating a socket fd to the
+    // tls tracing probes
+    propagate_fd_to_user_space_call(id, read_args->fd);
     process_syscall_data(ctx, id, kIngress, read_args, bytes_count);
   }
 
@@ -1075,6 +1194,8 @@ int syscall__probe_ret_read(struct pt_regs* ctx) {
 // ssize_t recv(int sockfd, void *buf, size_t len, int flags);
 int syscall__probe_entry_recv(struct pt_regs* ctx, int sockfd, char* buf, size_t len) {
   uint64_t id = bpf_get_current_pid_tgid();
+
+  propagate_fd_to_user_space_call(id, sockfd);
 
   // Stash arguments.
   struct data_args_t read_args = {};
@@ -1105,6 +1226,8 @@ int syscall__probe_ret_recv(struct pt_regs* ctx) {
 int syscall__probe_entry_sendto(struct pt_regs* ctx, int sockfd, char* buf, size_t len, int flags,
                                 const struct sockaddr* dest_addr, socklen_t addrlen) {
   uint64_t id = bpf_get_current_pid_tgid();
+
+  propagate_fd_to_user_space_call(id, sockfd);
 
   // Stash arguments.
   if (dest_addr != NULL) {
@@ -1165,6 +1288,8 @@ int syscall__probe_entry_recvfrom(struct pt_regs* ctx, int sockfd, char* buf, si
                                   struct sockaddr* src_addr, socklen_t* addrlen) {
   uint64_t id = bpf_get_current_pid_tgid();
 
+  propagate_fd_to_user_space_call(id, sockfd);
+
   // Stash arguments.
   if (src_addr != NULL) {
     struct connect_args_t connect_args = {};
@@ -1208,6 +1333,8 @@ int syscall__probe_ret_recvfrom(struct pt_regs* ctx) {
 int syscall__probe_entry_sendmsg(struct pt_regs* ctx, int sockfd,
                                  const struct user_msghdr* msghdr) {
   uint64_t id = bpf_get_current_pid_tgid();
+
+  propagate_fd_to_user_space_call(id, sockfd);
 
   if (msghdr != NULL) {
     // Stash arguments.
@@ -1254,6 +1381,8 @@ int syscall__probe_ret_sendmsg(struct pt_regs* ctx) {
 int syscall__probe_entry_sendmmsg(struct pt_regs* ctx, int sockfd, struct mmsghdr* msgvec,
                                   unsigned int vlen) {
   uint64_t id = bpf_get_current_pid_tgid();
+
+  propagate_fd_to_user_space_call(id, sockfd);
 
   // TODO(oazizi): Right now, we only trace the first message in a sendmmsg() call.
   if (msgvec != NULL && vlen >= 1) {
@@ -1307,6 +1436,8 @@ int syscall__probe_ret_sendmmsg(struct pt_regs* ctx) {
 int syscall__probe_entry_recvmsg(struct pt_regs* ctx, int sockfd, struct user_msghdr* msghdr) {
   uint64_t id = bpf_get_current_pid_tgid();
 
+  propagate_fd_to_user_space_call(id, sockfd);
+
   if (msghdr != NULL) {
     // Stash arguments.
     if (msghdr->msg_name != NULL) {
@@ -1354,6 +1485,8 @@ int syscall__probe_ret_recvmsg(struct pt_regs* ctx) {
 int syscall__probe_entry_recvmmsg(struct pt_regs* ctx, int sockfd, struct mmsghdr* msgvec,
                                   unsigned int vlen) {
   uint64_t id = bpf_get_current_pid_tgid();
+
+  propagate_fd_to_user_space_call(id, sockfd);
 
   // TODO(oazizi): Right now, we only trace the first message in a recvmmsg() call.
   if (msgvec != NULL && vlen >= 1) {
@@ -1425,6 +1558,10 @@ int syscall__probe_ret_writev(struct pt_regs* ctx) {
   // Unstash arguments, and process syscall.
   struct data_args_t* write_args = active_write_args_map.lookup(&id);
   if (write_args != NULL && write_args->sock_event) {
+    // Syscalls that aren't exclusively used for networking must be
+    // validated to be a sock_event before propagating a socket fd to the
+    // tls tracing probes
+    propagate_fd_to_user_space_call(id, write_args->fd);
     process_syscall_data_vecs(ctx, id, kEgress, write_args, bytes_count);
   }
 
@@ -1454,6 +1591,10 @@ int syscall__probe_ret_readv(struct pt_regs* ctx) {
   // Unstash arguments, and process syscall.
   struct data_args_t* read_args = active_read_args_map.lookup(&id);
   if (read_args != NULL && read_args->sock_event) {
+    // Syscalls that aren't exclusively used for networking must be
+    // validated to be a sock_event before propagating a socket fd to the
+    // tls tracing probes
+    propagate_fd_to_user_space_call(id, read_args->fd);
     process_syscall_data_vecs(ctx, id, kIngress, read_args, bytes_count);
   }
 
@@ -1549,8 +1690,9 @@ int probe_ret_sock_alloc(struct pt_regs* ctx) {
 
 // Trace kernel function:
 // int security_socket_sendmsg(struct socket *sock, struct msghdr *msg, int size)
+// int sock_sendmsg(struct socket *sock, struct msghdr *msg)
 // which is called by write/writev/send/sendmsg.
-int probe_entry_security_socket_sendmsg(struct pt_regs* ctx) {
+int probe_entry_socket_sendmsg(struct pt_regs* ctx) {
   uint64_t id = bpf_get_current_pid_tgid();
   struct data_args_t* write_args = active_write_args_map.lookup(&id);
   if (write_args != NULL) {
@@ -1561,7 +1703,8 @@ int probe_entry_security_socket_sendmsg(struct pt_regs* ctx) {
 
 // Trace kernel function:
 // int security_socket_recvmsg(struct socket *sock, struct msghdr *msg, int size)
-int probe_entry_security_socket_recvmsg(struct pt_regs* ctx) {
+// int sock_recvmsg(struct socket *sock, struct msghdr *msg, int flags)
+int probe_entry_socket_recvmsg(struct pt_regs* ctx) {
   uint64_t id = bpf_get_current_pid_tgid();
   struct data_args_t* read_args = active_read_args_map.lookup(&id);
   if (read_args != NULL) {

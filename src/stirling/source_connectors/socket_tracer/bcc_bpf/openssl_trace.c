@@ -33,13 +33,16 @@
 // This means there will be more entries in the map, when different binaries share libssl.so.
 BPF_HASH(openssl_symaddrs_map, uint32_t, struct openssl_symaddrs_t);
 
+BPF_ARRAY(openssl_trace_state, int, 1);
+BPF_HASH(openssl_trace_state_debug, uint32_t, struct openssl_trace_state_debug_t);
+
 /***********************************************************
  * General helpers
  ***********************************************************/
 
 static __inline void process_openssl_data(struct pt_regs* ctx, uint64_t id,
                                           const enum traffic_direction_t direction,
-                                          const struct data_args_t* args) {
+                                          const struct data_args_t* args, bool is_ex_call) {
   // Do not change bytes_count to 'ssize_t' or 'long'.
   // Using a 64b data type for bytes_count causes negative values,
   // returned as 'int' from open-ssl, to be aliased into positive
@@ -49,6 +52,16 @@ static __inline void process_openssl_data(struct pt_regs* ctx, uint64_t id,
   // 2. miscalculate the expected next position (with a very large value)
   // Succinctly, DO NOT MODIFY THE DATATYPE for bytes_count.
   int bytes_count = PT_REGS_RC(ctx);
+
+  // SSL_write_ex and SSL_read_ex will return 1 on success, which means that
+  // all requested application data bytes have been written to the SSL connection.
+  // The number of bytes read or written will be contained in the pointer passed
+  // as the fourth argument to the function.
+  if (bytes_count == 1 && args->ssl_ex_len != NULL) {
+    size_t ex_bytes;
+    BPF_PROBE_READ_VAR(ex_bytes, args->ssl_ex_len);
+    bytes_count = ex_bytes;
+  }
   process_data(/* vecs */ false, ctx, id, direction, args, bytes_count, /* ssl */ true);
 }
 
@@ -106,6 +119,41 @@ static int get_fd(uint32_t tgid, void* ssl) {
 BPF_HASH(active_ssl_read_args_map, uint64_t, struct data_args_t);
 BPF_HASH(active_ssl_write_args_map, uint64_t, struct data_args_t);
 
+static __inline int get_fd_and_eval_nested_syscall_detection(uint64_t pid_tgid) {
+  struct nested_syscall_fd_t* nested_syscall_fd_ptr = ssl_user_space_call_map.lookup(&pid_tgid);
+
+  if (nested_syscall_fd_ptr == NULL) {
+    // This state should not occur since ssl_user_space_call_map for a given pid_tgid is set
+    // upon SSL_write and SSL_read entry.
+    return kInvalidFD;
+  }
+
+  bool mismatched_fds = nested_syscall_fd_ptr->mismatched_fds;
+
+  if (ENABLE_TLS_DEBUG_SOURCES || mismatched_fds) {
+    int error_status_idx = kOpenSSLTraceStatusIdx;
+    int status_code = mismatched_fds ? kOpenSSLMismatchedFDsDetected : kOpenSSLTraceOk;
+    uint32_t tgid = pid_tgid >> 32;
+    enum ssl_source_t ssl_source = get_ssl_source(tgid);
+
+    struct openssl_trace_state_debug_t debug = {};
+    bpf_get_current_comm(&debug.comm, sizeof(debug.comm));
+    debug.ssl_source = ssl_source;
+    debug.mismatched_fd = mismatched_fds;
+
+    struct conn_info_t* conn_info = get_or_create_conn_info(tgid, nested_syscall_fd_ptr->fd);
+    debug.protocol = conn_info != NULL ? conn_info->protocol : kProtocolUnknown;
+
+    openssl_trace_state.update(&error_status_idx, &status_code);
+    openssl_trace_state_debug.update(&tgid, &debug);
+  }
+
+  int fd = nested_syscall_fd_ptr->fd;
+  ssl_user_space_call_map.delete(&pid_tgid);
+
+  return fd;
+}
+
 // Function signature being probed:
 // int SSL_write(SSL *ssl, const void *buf, int num);
 int probe_entry_SSL_write(struct pt_regs* ctx) {
@@ -129,7 +177,7 @@ int probe_entry_SSL_write(struct pt_regs* ctx) {
   active_ssl_write_args_map.update(&id, &write_args);
 
   // Mark connection as SSL right away, so encrypted traffic does not get traced.
-  set_conn_as_ssl(tgid, write_args.fd);
+  set_conn_as_ssl(tgid, write_args.fd, get_ssl_source(tgid));
 
   return 0;
 }
@@ -139,7 +187,7 @@ int probe_ret_SSL_write(struct pt_regs* ctx) {
 
   const struct data_args_t* write_args = active_ssl_write_args_map.lookup(&id);
   if (write_args != NULL) {
-    process_openssl_data(ctx, id, kEgress, write_args);
+    process_openssl_data(ctx, id, kEgress, write_args, false);
   }
 
   active_ssl_write_args_map.delete(&id);
@@ -169,7 +217,7 @@ int probe_entry_SSL_read(struct pt_regs* ctx) {
   active_ssl_read_args_map.update(&id, &read_args);
 
   // Mark connection as SSL right away, so encrypted traffic does not get traced.
-  set_conn_as_ssl(tgid, read_args.fd);
+  set_conn_as_ssl(tgid, read_args.fd, get_ssl_source(tgid));
 
   return 0;
 }
@@ -179,9 +227,142 @@ int probe_ret_SSL_read(struct pt_regs* ctx) {
 
   const struct data_args_t* read_args = active_ssl_read_args_map.lookup(&id);
   if (read_args != NULL) {
-    process_openssl_data(ctx, id, kIngress, read_args);
+    process_openssl_data(ctx, id, kIngress, read_args, false);
   }
 
   active_ssl_read_args_map.delete(&id);
   return 0;
+}
+
+static int probe_entry_SSL_write_syscall_fd_access_agnostic(struct pt_regs* ctx, bool is_ex_call) {
+  uint64_t id = bpf_get_current_pid_tgid();
+  uint32_t tgid = id >> 32;
+
+  void* ssl = (void*)PT_REGS_PARM1(ctx);
+
+  struct nested_syscall_fd_t nested_syscall_fd = {
+      .fd = kInvalidFD,
+  };
+  ssl_user_space_call_map.update(&id, &nested_syscall_fd);
+
+  char* buf = (char*)PT_REGS_PARM2(ctx);
+
+  struct data_args_t write_args = {};
+  write_args.source_fn = kSSLWrite;
+  write_args.buf = buf;
+  if (is_ex_call) {
+    size_t* ssl_ex_len = (size_t*)PT_REGS_PARM4(ctx);
+    write_args.ssl_ex_len = ssl_ex_len;
+  }
+
+  active_ssl_write_args_map.update(&id, &write_args);
+
+  return 0;
+}
+
+// Function signature being probed:
+// int SSL_write(SSL *ssl, const void *buf, int num);
+int probe_entry_SSL_write_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_entry_SSL_write_syscall_fd_access_agnostic(ctx, false);
+}
+
+// Function signature being probed:
+// int SSL_write_ex(SSL *ssl, const void *buf, size_t* written);
+//
+// On success SSL_write_ex will store the number of bytes written in *written.
+int probe_entry_SSL_write_ex_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_entry_SSL_write_syscall_fd_access_agnostic(ctx, true);
+}
+
+static int probe_ret_SSL_write_syscall_fd_access_agnostic(struct pt_regs* ctx, bool is_ex_call) {
+  uint64_t id = bpf_get_current_pid_tgid();
+
+  int fd = get_fd_and_eval_nested_syscall_detection(id);
+  if (fd == kInvalidFD) {
+    return 0;
+  }
+
+  struct data_args_t* write_args = active_ssl_write_args_map.lookup(&id);
+  // Set socket fd
+  if (write_args != NULL) {
+    write_args->fd = fd;
+    process_openssl_data(ctx, id, kEgress, write_args, is_ex_call);
+  }
+
+  active_ssl_write_args_map.delete(&id);
+  return 0;
+}
+
+int probe_ret_SSL_write_ex_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_ret_SSL_write_syscall_fd_access_agnostic(ctx, true);
+}
+
+int probe_ret_SSL_write_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_ret_SSL_write_syscall_fd_access_agnostic(ctx, false);
+}
+
+static int probe_entry_SSL_read_syscall_fd_access_agnostic(struct pt_regs* ctx, bool is_ex_call) {
+  uint64_t id = bpf_get_current_pid_tgid();
+  uint32_t tgid = id >> 32;
+
+  void* ssl = (void*)PT_REGS_PARM1(ctx);
+
+  struct nested_syscall_fd_t nested_syscall_fd = {
+      .fd = kInvalidFD,
+  };
+  ssl_user_space_call_map.update(&id, &nested_syscall_fd);
+
+  char* buf = (char*)PT_REGS_PARM2(ctx);
+
+  struct data_args_t read_args = {};
+  read_args.source_fn = kSSLRead;
+  read_args.buf = buf;
+  if (is_ex_call) {
+    size_t* ssl_ex_len = (size_t*)PT_REGS_PARM4(ctx);
+    read_args.ssl_ex_len = ssl_ex_len;
+  }
+
+  active_ssl_read_args_map.update(&id, &read_args);
+
+  return 0;
+}
+
+// Function signature being probed:
+// int SSL_read(SSL *s, void *buf, int num)
+int probe_entry_SSL_read_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_entry_SSL_read_syscall_fd_access_agnostic(ctx, false);
+}
+
+// Function signature being probed:
+// int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes);
+//
+// On success SSL_read_ex will store the number of bytes actually read in *readbytes.
+int probe_entry_SSL_read_ex_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_entry_SSL_read_syscall_fd_access_agnostic(ctx, true);
+}
+
+static int probe_ret_SSL_read_syscall_fd_access_agnostic(struct pt_regs* ctx, bool is_ex_call) {
+  uint64_t id = bpf_get_current_pid_tgid();
+
+  int fd = get_fd_and_eval_nested_syscall_detection(id);
+  if (fd == kInvalidFD) {
+    return 0;
+  }
+
+  struct data_args_t* read_args = active_ssl_read_args_map.lookup(&id);
+  if (read_args != NULL) {
+    read_args->fd = fd;
+    process_openssl_data(ctx, id, kIngress, read_args, is_ex_call);
+  }
+
+  active_ssl_read_args_map.delete(&id);
+  return 0;
+}
+
+int probe_ret_SSL_read_ex_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_ret_SSL_read_syscall_fd_access_agnostic(ctx, true);
+}
+
+int probe_ret_SSL_read_syscall_fd_access(struct pt_regs* ctx) {
+  return probe_ret_SSL_read_syscall_fd_access_agnostic(ctx, false);
 }

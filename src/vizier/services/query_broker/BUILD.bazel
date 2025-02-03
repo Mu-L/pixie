@@ -15,7 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@io_bazel_rules_docker//cc:image.bzl", "cc_image")
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary")
 
@@ -43,7 +42,7 @@ go_library(
         "@com_github_sirupsen_logrus//:logrus",
         "@com_github_spf13_pflag//:pflag",
         "@com_github_spf13_viper//:viper",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 
@@ -61,13 +60,4 @@ cc_image(
         "//k8s:__subpackages__",
         "//src/vizier:__subpackages__",
     ],
-)
-
-container_push(
-    name = "push_query_broker_server_image",
-    format = "Docker",
-    image = ":query_broker_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/vizier/query_broker_server_image",
-    tag = "{STABLE_BUILD_TAG}",
 )

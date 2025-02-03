@@ -65,7 +65,7 @@ Commit messages should provide enough information about what has changed and why
 #### Sign your commits
 
 The sign-off is a simple line at the end of the explanation for a commit. All commits needs to be
-signed. Your signature certifies that you wrote the patch or otherwise have the right to contribute
+signed and verified. Your signature certifies that you wrote the patch or otherwise have the right to contribute
 the material. The rules are pretty simple, if you can certify the below (from
 [developercertificate.org](https://developercertificate.org/)):
 
@@ -129,3 +129,27 @@ Use your real name (sorry, no pseudonyms or anonymous contributions.)
     ```
 
     Notice the `Author` and `Signed-off-by` lines match. If they don't your PR will be rejected by the automated DCO check.
+
+##### Commit Signature Verification
+
+All commit signatures must be verified to ensure that commits are coming from a trusted source. To do so, please follow Github's [Signing commits guide](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
+
+##### Setup pinentry-tty to handle headless environments
+
+When signing commits, gpg will need your passphrase to unlock the keyring. It usually uses a GUI pinentry program to do so. However on headless environments, this gets messy, so we highly recommend switching gpg to use a tty based pinentry to ease these problems.
+
+```
+echo "pinentry-program $(which pinentry-tty)" >> ~/.gnupg/gpg-agent.conf
+echo "export GPG_TTY=\$(tty)" >> ~/.zshrc
+echo "export GPG_TTY=\$(tty)" >> ~/.bashrc
+export GPG_TTY=$(tty)
+gpg-connect-agent reloadagent /bye
+```
+
+Here we tell `gpg` to use `pinentry-tty` when prompting for a passphrase, and export the current TTY to tell `gpg` which TTY to prompt on.
+
+### Releases
+
+Pixie has several releasable components. The main ones are: `control plane`, `vizier`, `operator`, Go/Python APIs, and the `cli`. All artifacts in Pixie are released using semantic versioning.
+
+Pixie has a weekly release process for each component, unless there have been no updates. When a component is ready to be released, a release candidate is made by creating a branch off of main. The release candidate branch is pushed to Github, triggering a Github Actions job to build any necessary images and artifacts. Once the build is complete, testing begins. If testing succeeds, a new branch is made for the release to trigger a Github Actions build for the official release. All releases, changelogs, and release notes are published to the [releases page](https://github.com/pixie-io/pixie/releases).

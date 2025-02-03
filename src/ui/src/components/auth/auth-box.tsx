@@ -23,7 +23,9 @@ import { Button, Link, Typography } from '@mui/material';
 import { Theme } from '@mui/material/styles';
 import { createStyles, makeStyles } from '@mui/styles';
 
+import pixieAnalytics from 'app/utils/analytics';
 import { WithChildren } from 'app/utils/react-boilerplate';
+import { privacyUri, termsUri } from 'configurable/tos-privacy';
 
 import { PixienautBox } from './pixienaut-box';
 
@@ -87,6 +89,11 @@ export const AuthBox: React.FC<WithChildren<AuthBoxProps>> = React.memo((props) 
     children,
   } = props;
   const classes = useStyles();
+
+  const reportToggleClick = React.useCallback(() => {
+    pixieAnalytics.track('Switched between Login and Signup', { newUrl: toggleURL });
+  }, [toggleURL]);
+
   return (
     <PixienautBox>
       <Typography variant='h1' className={classes.title}>
@@ -107,9 +114,9 @@ export const AuthBox: React.FC<WithChildren<AuthBoxProps>> = React.memo((props) 
           <>
             <Typography variant='subtitle2' className={classes.disclaimer}>
               By signing up, you&apos;re agreeing to&nbsp;
-              <a href='https://pixielabs.ai/terms/'>Terms of Service</a>
+              <a href={termsUri}>Terms of Service</a>
               &nbsp;and&nbsp;
-              <a href='https://pixielabs.ai/privacy'>Privacy Policy</a>
+              <a href={privacyUri}>Privacy Policy</a>
               .
             </Typography>
           </>
@@ -120,8 +127,14 @@ export const AuthBox: React.FC<WithChildren<AuthBoxProps>> = React.memo((props) 
         <Typography variant='subtitle2' className={classes.account}>
           {buttonCaption}
         </Typography>
-        {/* eslint-disable-next-line react-memo/require-usememo */}
-        <Button component={Link} color='primary' href={toggleURL} sx={{ ml: buttonCaption ? 1 : 0 }}>
+        <Button
+          component={Link}
+          color='primary'
+          href={toggleURL}
+          onClick={reportToggleClick}
+          // eslint-disable-next-line react-memo/require-usememo
+          sx={{ ml: buttonCaption ? 1 : 0 }}
+        >
           {buttonText}
         </Button>
       </div>

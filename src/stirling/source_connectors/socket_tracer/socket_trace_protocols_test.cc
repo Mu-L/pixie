@@ -27,7 +27,7 @@
 #include "src/stirling/source_connectors/socket_tracer/bcc_bpf_intf/socket_trace.hpp"
 
 #include "src/common/testing/testing.h"
-#include "src/stirling/core/data_table.h"
+#include "src/stirling/core/data_tables.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/cql/test_utils.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/mysql/test_data.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/mysql/test_utils.h"
@@ -115,7 +115,7 @@ class SocketTraceConnectorTest : public ::testing::Test {
 
     // Set the CIDR for HTTP2ServerTest, which would otherwise not output any data,
     // because it would think the server is in the cluster.
-    PL_CHECK_OK(ctx_->SetClusterCIDR("1.2.3.4/32"));
+    PX_CHECK_OK(ctx_->SetClusterCIDR("1.2.3.4/32"));
 
     // Because some tests change the inactivity duration, make sure to reset it here for each test.
     ConnTracker::set_inactivity_duration(ConnTracker::kDefaultInactivityDuration);
@@ -123,7 +123,7 @@ class SocketTraceConnectorTest : public ::testing::Test {
     FLAGS_stirling_check_proc_for_conn_close = false;
     FLAGS_stirling_conn_stats_sampling_ratio = 1;
 
-    data_tables_ = std::make_unique<testing::DataTables>(SocketTraceConnector::kTables);
+    data_tables_ = std::make_unique<DataTables>(SocketTraceConnector::kTables);
     connector_->set_data_tables(data_tables_->tables());
 
     // For convenience.
@@ -132,7 +132,7 @@ class SocketTraceConnectorTest : public ::testing::Test {
     cql_table_ = (*data_tables_)[SocketTraceConnector::kCQLTableNum];
   }
 
-  std::unique_ptr<testing::DataTables> data_tables_;
+  std::unique_ptr<DataTables> data_tables_;
   DataTable* http_table_;
   DataTable* mysql_table_;
   DataTable* cql_table_;

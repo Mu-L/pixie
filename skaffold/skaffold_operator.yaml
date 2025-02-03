@@ -3,7 +3,7 @@ apiVersion: skaffold/v4beta1
 kind: Config
 build:
   artifacts:
-  - image: gcr.io/pixie-oss/pixie-dev/operator/operator_image
+  - image: operator-operator_image
     context: .
     bazel:
       target: //src/operator:operator_image.tar
@@ -22,3 +22,9 @@ profiles:
     path: /build/local
     value:
       push: false
+- name: x86_64_sysroot
+  patches:
+  - op: add
+    path: /build/artifacts/context=./bazel/args
+    value:
+    - --config=x86_64_sysroot

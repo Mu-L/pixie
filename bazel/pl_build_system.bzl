@@ -20,6 +20,21 @@
 load("@io_bazel_rules_docker//go:image.bzl", "go_image")
 load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_context", "go_library", "go_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:toolchain_transitions.bzl", "qemu_interactive_runner")
+
+pl_boringcrypto_go_sdk = ["1.20.4"]
+pl_supported_go_sdk_versions = ["1.16", "1.17", "1.18", "1.19", "1.20", "1.21"]
+
+# The last version in this list corresponds to the boringcrypto go sdk version.
+pl_all_supported_go_sdk_versions = pl_supported_go_sdk_versions + pl_boringcrypto_go_sdk
+
+def pl_go_sdk_version_template_to_label(tpl, version):
+    # If version matches sdk configured to use boringcrypto
+    # the label name should not contain the sdk version string
+    if version in pl_boringcrypto_go_sdk:
+        return tpl % "boringcrypto"
+    return tpl % version.replace(".", "_")
 
 def pl_copts():
     posix_options = [
@@ -133,7 +148,6 @@ def pl_cc_library_internal(
         copts = [],
         includes = [],
         visibility = None,
-        external_deps = [],
         tcmalloc_dep = False,
         repository = "",
         linkstamp = None,
@@ -181,7 +195,6 @@ def pl_cc_binary(
         args = [],
         testonly = 0,
         visibility = None,
-        external_deps = [],
         repository = "",
         stamp = 0,
         tags = [],
@@ -210,6 +223,40 @@ def pl_cc_binary(
         features = pl_default_features(),
     )
 
+def _default_empty_list(name, kwargs):
+    if not name in kwargs:
+        kwargs[name] = []
+
+def pl_cc_musl_binary(name, **kwargs):
+    _default_empty_list("copts", kwargs)
+    kwargs["copts"] = kwargs["copts"] + ["-nostdlib", "-nostdinc"]
+
+    _default_empty_list("additional_linker_inputs", kwargs)
+    kwargs["additional_linker_inputs"] = kwargs["additional_linker_inputs"] + [
+        "@org_libc_musl//:crt1.o",
+        "@org_libc_musl//:crti.o",
+        "@org_libc_musl//:crtn.o",
+    ]
+
+    linkshared = "linkshared" in kwargs and kwargs["linkshared"]
+    start_libs = []
+    if not linkshared:
+        start_libs = start_libs + ["$(location @org_libc_musl//:crt1.o)"]
+    start_libs = start_libs + ["$(location @org_libc_musl//:crti.o)"]
+    end_libs = ["$(location @org_libc_musl//:crtn.o)"]
+    linkopts = [
+        "-nostdlib",
+        "-nodefaultlibs",
+        "-nostartfiles",
+        "-lgcc",
+    ]
+    _default_empty_list("linkopts", kwargs)
+    kwargs["linkopts"] = start_libs + kwargs["linkopts"] + linkopts + end_libs
+
+    _default_empty_list("deps", kwargs)
+    kwargs["deps"] = kwargs["deps"] + ["@org_libc_musl//:musl"]
+    cc_binary(name = name, **kwargs)
+
 # PL C++ test targets should be specified with this function.
 def pl_cc_test(
         name,
@@ -225,7 +272,8 @@ def pl_cc_test(
         defines = [],
         coverage = True,
         local = False,
-        flaky = False):
+        flaky = False,
+        **kwargs):
     test_lib_tags = list(tags)
     if coverage:
         test_lib_tags.append("coverage_test_lib")
@@ -250,7 +298,7 @@ def pl_cc_test(
             repository + "//src/shared/version:test_version_linkstamp",
         ] + _default_external_deps(),
         args = args,
-        data = data,
+        data = data + ["//bazel/test_runners:test_runner_dep"],
         tags = tags + ["coverage_test"],
         shard_count = shard_count,
         size = size,
@@ -258,6 +306,7 @@ def pl_cc_test(
         local = local,
         flaky = flaky,
         features = pl_default_features(),
+        **kwargs
     )
 
 # PL C++ test related libraries (that want gtest, gmock) should be specified
@@ -267,7 +316,6 @@ def pl_cc_test_library(
         srcs = [],
         hdrs = [],
         data = [],
-        external_deps = [],
         deps = [],
         visibility = None,
         repository = "",
@@ -385,7 +433,7 @@ pl_bindata = rule(
         "strip_external": attr.bool(default = False),
         "_bindata": attr.label(
             executable = True,
-            cfg = "host",
+            cfg = "exec",
             # Modification of go_bindata repo from kevinburke to the go-bindata repo.
             default = "@com_github_go_bindata_go_bindata//go-bindata:go-bindata",
         ),
@@ -407,10 +455,57 @@ def _add_no_pie(kwargs):
     kwargs["gc_linkopts"].append("-extldflags")
     kwargs["gc_linkopts"].append("-no-pie")
 
+def _add_test_runner(kwargs):
+    if "data" not in kwargs:
+        kwargs["data"] = []
+    kwargs["data"].append("//bazel/test_runners:test_runner_dep")
+
+def _add_no_sysroot(kwargs):
+    if "target_compatible_with" not in kwargs:
+        kwargs["target_compatible_with"] = []
+    kwargs["target_compatible_with"] = kwargs["target_compatible_with"] + select({
+        "//bazel/cc_toolchains:libc_version_glibc_host": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    })
+
 def pl_go_test(**kwargs):
     _add_no_pie(kwargs)
+    _add_test_runner(kwargs)
     go_test(**kwargs)
 
 def pl_go_binary(**kwargs):
     _add_no_pie(kwargs)
     go_binary(**kwargs)
+
+def pl_py_test(**kwargs):
+    _add_test_runner(kwargs)
+    _add_no_sysroot(kwargs)
+    py_test(**kwargs)
+
+def pl_sh_test(**kwargs):
+    _add_test_runner(kwargs)
+    native.sh_test(**kwargs)
+
+def pl_cc_bpf_test(**kwargs):
+    pl_cc_test(**kwargs)
+    qemu_interactive_runner(
+        name = kwargs["name"] + "_qemu_interactive",
+        test = ":" + kwargs["name"],
+        tags = [
+            "manual",
+            "qemu_interactive",
+        ],
+        testonly = True,
+    )
+
+def pl_sh_bpf_test(**kwargs):
+    pl_sh_test(**kwargs)
+    qemu_interactive_runner(
+        name = kwargs["name"] + "_qemu_interactive",
+        test = ":" + kwargs["name"],
+        tags = [
+            "manual",
+            "qemu_interactive",
+        ],
+        testonly = True,
+    )

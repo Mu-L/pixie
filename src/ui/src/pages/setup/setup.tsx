@@ -27,11 +27,13 @@ import * as QueryString from 'query-string';
 import { Redirect, useLocation } from 'react-router';
 
 import { Footer, scrollbarStyles } from 'app/components';
+import { Spinner } from 'app/components/spinner/spinner';
 import NavBars from 'app/containers/App/nav-bars';
 import { SidebarContext } from 'app/context/sidebar-context';
 import { WithChildren } from 'app/utils/react-boilerplate';
 import * as pixienautSetup from 'assets/images/pixienaut-setup.svg';
 import { Copyright } from 'configurable/copyright';
+import { useCreateOrgExtras } from 'configurable/create-org-extras';
 
 function useRedirectUri(): string {
   const { search } = useLocation();
@@ -110,6 +112,12 @@ const useStyles = makeStyles((theme: Theme) => createStyles({
     display: 'flex',
     justifyContent: 'center',
   },
+  extrasWrapper: {
+    display: 'flex',
+    flexFlow: 'column nowrap',
+    alignItems: 'center',
+    paddingTop: theme.spacing(2),
+  },
   buttons: {
     display: 'flex',
     justifyContent: 'center',
@@ -145,6 +153,12 @@ const SetupPage = React.memo<WithChildren>(({ children }) => {
 });
 SetupPage.displayName = 'SetupPage';
 
+export const CREATE_ORG_GQL = gql`
+  mutation CreateOrgFromSetupOrgPage($orgName: String!) {
+    CreateOrg(orgName: $orgName)
+  }
+`;
+
 const SetupOrganization = React.memo<{ redirectUri: string }>(({ redirectUri }) => {
   const classes = useStyles();
 
@@ -172,26 +186,30 @@ const SetupOrganization = React.memo<{ redirectUri: string }>(({ redirectUri }) 
   }, [inputValue]);
 
   const [createOrgMutation] = useMutation<{ CreateOrg: string }, { orgName: string }>(
-    gql`
-      mutation CreateOrgFromSetupOrgPage($orgName: String!) {
-        CreateOrg(orgName: $orgName)
-      }
-    `,
+    CREATE_ORG_GQL,
   );
 
-  const createOrg = React.useCallback(() => {
+  const [creating, setCreating] = React.useState(false);
+  const extras = useCreateOrgExtras(creating);
+
+  const createOrg = React.useCallback(async () => {
     if (!valid) return;
 
-    createOrgMutation({
-      variables: { orgName: inputValue.trim() },
-    }).then(() => (
-      Axios.post('/api/auth/refetch')
-    )).then(() => {
+    setCreating(true);
+    try {
+      await extras.beforeCreate();
+      await createOrgMutation({
+        variables: { orgName: inputValue.trim() },
+      });
+      await Axios.post('/api/auth/refetch');
+      await extras.afterCreate();
+      setCreating(false);
       window.location.href = redirectUri;
-    }).catch((error) => {
+    } catch (error) {
       setCreateOrgError(error.message);
-    });
-  }, [createOrgMutation, inputValue, redirectUri, setCreateOrgError, valid]);
+    }
+    setCreating(false);
+  }, [extras, createOrgMutation, inputValue, redirectUri, setCreateOrgError, valid]);
 
   const onSubmit = React.useCallback((event: React.FormEvent) => {
     createOrg();
@@ -202,7 +220,7 @@ const SetupOrganization = React.memo<{ redirectUri: string }>(({ redirectUri }) 
 
   return (
     <Paper elevation={1} className={classes.paper}>
-      <form onSubmit={onSubmit}>
+      <form onSubmit={onSubmit} aria-label='Create Your Organization'>
         <h1>Create Your Organization</h1>
         <figure>
           <img src={pixienautSetup} alt='Setup' />
@@ -226,9 +244,16 @@ const SetupOrganization = React.memo<{ redirectUri: string }>(({ redirectUri }) 
         <p className={classes.muted}>
           Trying to join an organization? Please ask the organization admin for an invite, and check your email.
         </p>
+        {extras.infixComponent && <div className={classes.extrasWrapper}>{extras.infixComponent}</div>}
         <div className={classes.buttons}>
-          <Button variant='contained' color='primary' onClick={createOrg} disabled={!valid || !inputValue.length}>
-            Create
+          <Button
+            variant='contained'
+            color='primary'
+            onClick={createOrg}
+            disabled={creating || !valid || !extras.valid || !inputValue.length}
+            endIcon={creating ? <Spinner /> : null}
+          >
+            { (creating && (extras.loadingText || 'Creating')) || 'Create' }
           </Button>
         </div>
       </form>

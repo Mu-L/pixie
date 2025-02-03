@@ -30,12 +30,24 @@ message AgentCapabilities {
   bool collects_data = 1;
 }
 
+message AgentParameters {
+  int32 profiler_stack_trace_sample_period_ms = 1
+      [ (gogoproto.customname) = "ProfilerStackTraceSamplePeriodMS" ];
+}
+
 // AgentInfo contains information about host and agent running on a given machine.
 message AgentInfo {
   uuidpb.UUID agent_id = 1 [ (gogoproto.customname) = "AgentID" ];
   HostInfo host_info = 2;
   string ip_address = 3 [ (gogoproto.customname) = "IPAddress" ];
   AgentCapabilities capabilities = 4;
+  AgentParameters parameters = 5;
+}
+
+message KernelVersion {
+  uint32 version = 1;
+  uint32 major_rev = 2;
+  uint32 minor_rev = 3;
 }
 
 // HostInfo contains the details for the host (OS, kernel, CPU, etc).
@@ -48,6 +60,10 @@ message HostInfo {
   string pod_name = 2;
   // The IP of the host that pod is running on. This can used to avoid extra K8s lookups.
   string host_ip = 3 [ (gogoproto.customname) = "HostIP" ];
+  // Version of the kernel running on the host.
+  KernelVersion kernel = 4;
+  // Whether kernel headers were preinstalled on the host.
+  bool kernel_headers_installed = 5;
 }
 
 // Agent contains information about a specific agent instance.

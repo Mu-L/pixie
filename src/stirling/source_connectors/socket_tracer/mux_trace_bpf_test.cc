@@ -32,7 +32,7 @@
 #include "src/stirling/core/output.h"
 #include "src/stirling/source_connectors/socket_tracer/mux_table.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/mux/types.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/thrift_mux_server_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/protocol_checkers.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/common.h"
@@ -46,14 +46,13 @@ namespace mux = protocols::mux;
 using ::px::stirling::testing::EqMuxRecord;
 using ::px::stirling::testing::FindRecordIdxMatchesPID;
 using ::px::stirling::testing::FindRecordsMatchingPID;
+using ::px::stirling::testing::GetEncrypted;
 using ::px::stirling::testing::GetTargetRecords;
 using ::px::stirling::testing::SocketTraceBPFTestFixture;
-using ::testing::AllOf;
-using ::testing::UnorderedElementsAre;
-using ::testing::UnorderedElementsAreArray;
 
 using ::testing::Each;
 using ::testing::Field;
+using ::testing::IsFalse;
 using ::testing::MatchesRegex;
 
 // The Init() function is used to set flags for the entire test.
@@ -79,7 +78,7 @@ class MuxTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */ t
     // Stirling will run after this unblocks, as part of SocketTraceBPFTest SetUp().
 
     // Run the thriftmux server and then the thriftmux client container
-    PL_CHECK_OK(server_.Run(std::chrono::seconds{60}));
+    PX_CHECK_OK(server_.Run(std::chrono::seconds{60}));
   }
 
   std::string thriftmux_client_output = "StringString";
@@ -90,9 +89,9 @@ class MuxTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */ t
 
   StatusOr<int32_t> RunThriftMuxClient() {
     std::string cmd =
-        absl::StrFormat("docker exec %s /usr/bin/java -cp %s Client & echo $! && wait",
+        absl::StrFormat("podman exec %s /usr/bin/java -cp %s Client & echo $! && wait",
                         server_.container_name(), classpath);
-    PL_ASSIGN_OR_RETURN(std::string out, px::Exec(cmd));
+    PX_ASSIGN_OR_RETURN(std::string out, px::Exec(cmd));
 
     LOG(INFO) << absl::StrFormat("thriftmux client command output: '%s'", out);
 
@@ -116,18 +115,6 @@ class MuxTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */ t
   ::px::stirling::testing::ThriftMuxServerContainer server_;
 };
 
-std::vector<mux::Record> ToRecordVector(const types::ColumnWrapperRecordBatch& rb,
-                                        const std::vector<size_t>& indices) {
-  std::vector<mux::Record> result;
-
-  for (const auto& idx : indices) {
-    mux::Record r;
-    r.req.type = static_cast<int8_t>(rb[kMuxReqTypeIdx]->Get<types::Int64Value>(idx).val);
-    result.push_back(r);
-  }
-  return result;
-}
-
 mux::Record RecordWithType(mux::Type req_type) {
   mux::Record r = {};
   r.req.type = static_cast<int8_t>(req_type);
@@ -148,16 +135,18 @@ TEST_F(MuxTraceTest, Capture) {
 
   // Grab the data from Stirling.
   std::vector<TaggedRecordBatch> tablets = ConsumeRecords(SocketTraceConnector::kMuxTableNum);
-  ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& record_batch, tablets);
+  ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& rb, tablets);
 
-  std::vector<mux::Record> server_records =
-      GetTargetRecords<mux::Record>(record_batch, server_.process_pid());
+  const std::vector<size_t> indices =
+      testing::FindRecordIdxMatchesPID(rb, kMuxUPIDIdx, server_.process_pid());
+  std::vector<mux::Record> server_records = testing::ToRecordVector<mux::Record>(rb, indices);
 
   mux::Record tinitCheck = RecordWithType(mux::Type::kRerrOld);
   mux::Record tinit = RecordWithType(mux::Type::kTinit);
   mux::Record pingRecord = RecordWithType(mux::Type::kTping);
   mux::Record dispatchRecord = RecordWithType(mux::Type::kTdispatch);
 
+  EXPECT_THAT(GetEncrypted(rb, kMuxEncryptedIdx, indices), Contains(IsFalse()));
   EXPECT_THAT(server_records, Contains(EqMuxRecord(tinitCheck)));
   EXPECT_THAT(server_records, Contains(EqMuxRecord(tinit)));
   EXPECT_THAT(server_records, Contains(EqMuxRecord(pingRecord)));

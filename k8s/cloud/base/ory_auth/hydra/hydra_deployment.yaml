@@ -17,6 +17,11 @@ spec:
       labels:
         name: hydra
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10100
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
       - name: migrate
         args:
@@ -56,14 +61,23 @@ spec:
           # yamllint disable-line rule:line-length
           value: postgres://$(PL_POSTGRES_USERNAME):$(PL_POSTGRES_PASSWORD)@$(PL_POSTGRES_HOSTNAME):$(PL_POSTGRES_PORT)/$(PL_POSTGRES_DB)?sslmode=disable&max_conns=20&max_idle_conns=4
         imagePullPolicy: IfNotPresent
-        image: oryd/hydra:v1.9.2-sqlite
+        image: oryd/hydra:v1.9.2-sqlite@sha256:61771c706934e1ffd66f86700a28a294ce4ed150fbf30cc131710924271a5871
         volumeMounts:
         - mountPath: /etc/config/hydra
           name: config
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
       containers:
       - name: server
         imagePullPolicy: IfNotPresent
-        image: oryd/hydra:v1.9.2-sqlite
+        image: oryd/hydra:v1.9.2-sqlite@sha256:61771c706934e1ffd66f86700a28a294ce4ed150fbf30cc131710924271a5871
         args:
         - serve
         - -c
@@ -128,10 +142,18 @@ spec:
         - name: certs
           mountPath: /certs
         resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
       - name: client-create-or-update
         imagePullPolicy: IfNotPresent
-        image: oryd/hydra:v1.9.2-alpine
-        # yamllint disable rule:indentation
+        image: oryd/hydra:v1.9.2-alpine@sha256:faa6ca02e77e0a08f66bfa7470a5e06d80e6e68c9c35410c65a4ea7b501aea61
         command: ['sh', '-c', 'set -x;
           URL="https://localhost:4445/health/ready";
           until [
@@ -160,7 +182,6 @@ spec:
             --skip-tls-verify;
           sleep infinity;
         ']
-        # yamllint enable rule:indentation
         envFrom:
         - configMapRef:
             name: pl-domain-config
@@ -170,6 +191,15 @@ spec:
             secretKeyRef:
               name: pl-hydra-secrets
               key: CLIENT_SECRET
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
       restartPolicy: Always
       volumes:
       - name: config

@@ -18,23 +18,62 @@
 
 import * as React from 'react';
 
-import { CommandProvider } from 'app/components/command-palette/providers/command-provider';
+import { PixieCommandIcon as ScriptIcon } from 'app/components';
+import {
+  CommandProvider,
+  CommandProviderDispatchAction,
+  CommandProviderState,
+} from 'app/components/command-palette/providers/command-provider';
+import { SCRATCH_SCRIPT } from 'app/containers/App/scripts-context';
 import { GQLAutocompleteEntityKind } from 'app/types/schema';
+import { checkExhaustive } from 'app/utils/check-exhaustive';
+
+import { CompletionDescription, CompletionLabel, quoteIfNeeded } from './script-provider-common';
+
+const DEFAULT: CommandProviderState = {
+  input: '',
+  selection: [0, 0],
+  providerName: 'EmptyInputScriptProvider',
+  loading: false,
+  completions: [],
+  hasAdditionalMatches: false,
+};
+
+const suggestions = [
+  {
+    sel: `script:${quoteIfNeeded(SCRATCH_SCRIPT.id)}`,
+    label: SCRATCH_SCRIPT.title,
+    desc: SCRATCH_SCRIPT.description,
+  },
+  {
+    sel: 'script:px/cluster start_time:-5m',
+    label: 'px/cluster',
+    desc: 'Read the high-level status of your cluster: namespaces, pods, performance metrics, etc.',
+  },
+];
 
 /**
  * On an empty input, suggests commonly-used script commands. On a non-empty input, doesn't suggest anything.
  */
 export const useEmptyInputScriptProvider: CommandProvider = () => {
-  return React.useCallback(async (input: string) => {
-    return {
-      providerName: 'Suggested Scripts',
-      hasAdditionalMatches: false,
-      completions: !input.trim().length ? [{
-        key: GQLAutocompleteEntityKind.AEK_SCRIPT,
-        label: 'script:px/cluster',
-        description: 'Read the high-level status of your cluster: namespaces, pods, performance metrics, etc.',
-        onSelect: () => ['script:px/cluster start_time:-5m', 32],
-      }] : [], // No suggestions if the input has meaningful text in it already.
-    };
-  }, []);
+  return React.useReducer((prevState: CommandProviderState, action: CommandProviderDispatchAction) => {
+    const { type } = action;
+    switch (type) {
+      case 'cancel': return prevState;
+      case 'invoke': return {
+        ...DEFAULT,
+        input: action.input,
+        selection: action.selection,
+        completions: !action.input.trim().length ? suggestions.map(({ sel, label, desc }, i) => ({
+          heading: 'Suggested Scripts',
+          key: GQLAutocompleteEntityKind.AEK_SCRIPT + '_' + i,
+          // eslint-disable-next-line react-memo/require-usememo
+          label: <CompletionLabel icon={<ScriptIcon />} input={label} highlights={[]} />,
+          description: <CompletionDescription title={label} body={desc} />,
+          onSelect: () => [sel, sel.length] as [string, number],
+        })) : [], // No suggestions if the input has meaningful text in it already.
+      };
+      default: checkExhaustive(type);
+    }
+  }, DEFAULT);
 };

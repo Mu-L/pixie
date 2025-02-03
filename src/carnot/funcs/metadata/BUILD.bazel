@@ -26,6 +26,7 @@ pl_cc_library(
     ),
     hdrs = glob(["*.h"]),
     deps = [
+        "//src/carnot/funcs/shared:cc_library",
         "//src/carnot/udf:cc_library",
         "//src/shared/metadata:cc_library",
         "@com_github_tencent_rapidjson//:rapidjson",
@@ -38,6 +39,8 @@ pl_cc_test(
     deps = [
         ":cc_library",
         "//src/carnot/udf:udf_testutils",
+        "//src/common/event:cc_library",
+        "//src/common/testing/event:cc_library",
         "//src/shared/k8s/metadatapb:metadata_testutils",
         "//src/shared/metadata:test_utils",
     ],

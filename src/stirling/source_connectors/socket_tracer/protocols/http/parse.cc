@@ -25,7 +25,8 @@
 #include <string>
 #include <utility>
 
-DEFINE_uint32(http_body_limit_bytes, 1024,
+DEFINE_uint32(http_body_limit_bytes,
+              gflags::Uint32FromEnv("PX_STIRLING_HTTP_BODY_LIMIT_BYTES", 1024),
               "The amount of an HTTP body that will be returned on a parse");
 
 namespace px {
@@ -106,7 +107,7 @@ ParseState ParseRequestBody(std::string_view* buf, Message* result) {
     std::string_view content_len_str = content_length_iter->second;
     auto r = ParseContent(content_len_str, buf, FLAGS_http_body_limit_bytes, &result->body,
                           &result->body_size);
-    DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
+    CTX_DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
     return r;
   }
 
@@ -115,7 +116,7 @@ ParseState ParseRequestBody(std::string_view* buf, Message* result) {
   if (transfer_encoding_iter != result->headers.end() &&
       transfer_encoding_iter->second == "chunked") {
     auto s = ParseChunked(buf, FLAGS_http_body_limit_bytes, &result->body, &result->body_size);
-    DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
+    CTX_DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
     return s;
   }
 
@@ -156,7 +157,7 @@ ParseState ParseResponseBody(std::string_view* buf, Message* result, State* stat
     std::string_view content_len_str = content_length_iter->second;
     auto s = ParseContent(content_len_str, buf, FLAGS_http_body_limit_bytes, &result->body,
                           &result->body_size);
-    DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
+    CTX_DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
     return s;
   }
 
@@ -165,7 +166,7 @@ ParseState ParseResponseBody(std::string_view* buf, Message* result, State* stat
   if (transfer_encoding_iter != result->headers.end() &&
       transfer_encoding_iter->second == "chunked") {
     auto s = ParseChunked(buf, FLAGS_http_body_limit_bytes, &result->body, &result->body_size);
-    DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
+    CTX_DCHECK_LE(result->body.size(), FLAGS_http_body_limit_bytes);
     return s;
   }
 

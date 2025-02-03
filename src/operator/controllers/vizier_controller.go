@@ -26,14 +26,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/blang/semver"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/gogo/protobuf/types"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -68,6 +72,11 @@ const (
 // a storage class is default.
 var defaultClassAnnotationKeys = []string{"storageclass.kubernetes.io/is-default-class", "storageclass.beta.kubernetes.io/is-default-class"}
 
+// The k8s API kinds that should be excluded from a Vizier's nodeSelector setting.
+// Resources such as DaemonSets should run on all nodes of the cluster, so applying
+// the nodeSelector uniformly across all pods leads to unexpected behavior.
+var nodeSelectorExcludedKinds = []string{"DaemonSet"}
+
 // VizierReconciler reconciles a Vizier object
 type VizierReconciler struct {
 	client.Client
@@ -78,6 +87,7 @@ type VizierReconciler struct {
 
 	monitor      *VizierMonitor
 	lastChecksum []byte
+	K8sVersion   string
 
 	sentryFlush func()
 }
@@ -125,6 +135,97 @@ func getLatestVizierVersion(ctx context.Context, client cloudpb.ArtifactTrackerC
 	return resp.Artifact[0].VersionStr, nil
 }
 
+// Kubernetes used to have in-tree plugins for a variety of vendor CSI drivers.
+// These provisioners had "kubernetes.io/" prefixes. Often times these provisioner names
+// are still used in the storageclass but the calls are redirected to CSIDrivers under new names.
+// This map maintains that list of redirects.
+// See https://kubernetes.io/docs/concepts/storage/volumes and
+// https://kubernetes.io/docs/concepts/storage/storage-classes/#provisioner.
+var migratedCSIDrivers = map[string]string{
+	"kubernetes.io/aws-ebs":         "ebs.csi.aws.com",
+	"kubernetes.io/azure-disk":      "disk.csi.azure.com",
+	"kubernetes.io/azure-file":      "file.csi.azure.com",
+	"kubernetes.io/cinder":          "cinder.csi.openstack.org",
+	"kubernetes.io/gce-pd":          "pd.csi.storage.gke.io",
+	"kubernetes.io/portworx-volume": "pxd.portworx.com",
+	"kubernetes.io/vsphere-volume":  "csi.vsphere.vmware.com",
+}
+
+func hasCSIDriver(clientset *kubernetes.Clientset, name string) (bool, error) {
+	_, err := clientset.StorageV1().CSIDrivers().Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return false, err
+	} else if k8serrors.IsNotFound(err) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func defaultStorageClassHasCSIDriver(clientset *kubernetes.Clientset) (bool, error) {
+	storageClasses, err := clientset.StorageV1().StorageClasses().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return false, err
+	}
+
+	var defaultStorageClass *storagev1.StorageClass
+	// Check annotations map on each storage class to see if default is set to "true".
+	for _, storageClass := range storageClasses.Items {
+		annotationsMap := storageClass.GetAnnotations()
+		for _, key := range defaultClassAnnotationKeys {
+			if annotationsMap[key] == "true" {
+				defaultStorageClass = &storageClass
+				break
+			}
+		}
+	}
+	if defaultStorageClass == nil {
+		return false, errors.New("no default storage class")
+	}
+	csi := defaultStorageClass.Provisioner
+	if migrated, ok := migratedCSIDrivers[csi]; ok {
+		csi = migrated
+	}
+
+	// For all non-migrated kubernetes provisioners, kubernetes itself will have an internal provisioner,
+	// so no need to check for a CSIDriver.
+	if strings.HasPrefix(csi, "kubernetes.io/") {
+		return true, nil
+	}
+	// If the provisioner contains a "/" then we assume it is a custom provisioner that doesn't use the CSI pattern,
+	// so we skip checking for a CSIDriver and hope the provisioner works.
+	if strings.Contains(csi, "/") {
+		return true, nil
+	}
+
+	return hasCSIDriver(clientset, csi)
+}
+
+// missingNecessaryCSIDriver checks if the user is running an EKS cluster, and if so, whether they are
+// missing the CSIDriver. Without the CSI driver, persistent volumes may not be able to be deployed.
+func missingNecessaryCSIDriver(clientset *kubernetes.Clientset, k8sVersion string) bool {
+	// This check only needs to be done for eks clusters with K8s version > 1.22.0.
+	if !strings.Contains(k8sVersion, "-eks-") {
+		return false
+	}
+
+	parsedVersion, err := semver.ParseTolerant(k8sVersion)
+	if err != nil {
+		log.WithError(err).Error("Failed to parse K8s cluster version")
+		return false
+	}
+	driverVersionRange, _ := semver.ParseRange("<=1.22.0")
+	if driverVersionRange(parsedVersion) {
+		return false
+	}
+
+	hasDriver, err := defaultStorageClassHasCSIDriver(clientset)
+	if err != nil {
+		log.WithError(err).Warn("failed to determine if the default storage class has a valid CSI driver")
+		return false
+	}
+	return !hasDriver
+}
+
 // validateNumDefaultStorageClasses returns a boolean whether there is exactly
 // 1 default storage class or not.
 func validateNumDefaultStorageClasses(clientset *kubernetes.Clientset) (bool, error) {
@@ -153,7 +254,6 @@ func validateNumDefaultStorageClasses(clientset *kubernetes.Clientset) (bool, er
 // Reconcile updates the Vizier running in the cluster to match the expected state.
 func (r *VizierReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log.WithField("req", req).Info("Reconciling Vizier...")
-
 	// Fetch vizier CRD to determine what operation should be performed.
 	var vizier v1alpha1.Vizier
 	if err := r.Get(ctx, req.NamespacedName, &vizier); err != nil {
@@ -365,7 +465,7 @@ func (r *VizierReconciler) deployVizier(ctx context.Context, req ctrl.Request, v
 		vz.Spec.Pod.NodeSelector = make(map[string]string)
 	}
 
-	if !vz.Spec.UseEtcdOperator {
+	if !vz.Spec.UseEtcdOperator && !update {
 		// Check if the cluster offers PVC support.
 		// If it does not, we should default to using the etcd operator, which does not
 		// require PVC support.
@@ -373,7 +473,9 @@ func (r *VizierReconciler) deployVizier(ctx context.Context, req ctrl.Request, v
 		if err != nil {
 			log.WithError(err).Error("Error checking default storage classes")
 		}
-		if !defaultStorageExists {
+		missingCSIDriver := missingNecessaryCSIDriver(r.Clientset, r.K8sVersion)
+
+		if !defaultStorageExists || missingCSIDriver {
 			log.Warn("No default storage class detected for cluster. Deploying etcd operator instead of statefulset for metadata backend.")
 			vz.Spec.UseEtcdOperator = true
 		}
@@ -395,7 +497,7 @@ func (r *VizierReconciler) deployVizier(ctx context.Context, req ctrl.Request, v
 		return err
 	}
 
-	configForVizierResp, err := generateVizierYAMLsConfig(ctx, req.Namespace, vz, cloudClient)
+	configForVizierResp, err := generateVizierYAMLsConfig(ctx, req.Namespace, r.K8sVersion, vz, cloudClient)
 	if err != nil {
 		log.WithError(err).Error("Failed to generate configs for Vizier YAMLs")
 		return err
@@ -668,17 +770,6 @@ func (r *VizierReconciler) deployVizierCore(ctx context.Context, namespace strin
 		return err
 	}
 
-	// If updating, don't reapply service accounts as that will create duplicate service tokens.
-	if allowUpdate {
-		filteredResources := make([]*k8s.Resource, 0)
-		for _, r := range resources {
-			if r.GVK.Kind != "ServiceAccount" {
-				filteredResources = append(filteredResources, r)
-			}
-		}
-		resources = filteredResources
-	}
-
 	for _, r := range resources {
 		err = updateResourceConfiguration(r, vz)
 		if err != nil {
@@ -700,7 +791,7 @@ func updateResourceConfiguration(resource *k8s.Resource, vz *v1alpha1.Vizier) er
 	addKeyValueMapToResource("labels", vz.Spec.Pod.Labels, resource.Object.Object)
 	addKeyValueMapToResource("annotations", vz.Spec.Pod.Annotations, resource.Object.Object)
 	updateResourceRequirements(vz.Spec.Pod.Resources, resource.Object.Object)
-	updatePodSpec(vz.Spec.Pod.NodeSelector, vz.Spec.Pod.SecurityContext, resource.Object.Object)
+	updatePodSpec(vz.Spec.Pod.NodeSelector, vz.Spec.Pod.Tolerations, vz.Spec.Pod.SecurityContext, resource.Object.Object)
 	return nil
 }
 
@@ -718,12 +809,13 @@ func convertResourceType(originalLst v1.ResourceList) *vizierconfigpb.ResourceLi
 
 // generateVizierYAMLsConfig is responsible retrieving a yaml map of configurations from
 // Pixie Cloud.
-func generateVizierYAMLsConfig(ctx context.Context, ns string, vz *v1alpha1.Vizier, conn *grpc.ClientConn) (*cloudpb.ConfigForVizierResponse,
+func generateVizierYAMLsConfig(ctx context.Context, ns string, k8sVersion string, vz *v1alpha1.Vizier, conn *grpc.ClientConn) (*cloudpb.ConfigForVizierResponse,
 	error) {
 	client := cloudpb.NewConfigServiceClient(conn)
 
 	req := &cloudpb.ConfigForVizierRequest{
-		Namespace: ns,
+		Namespace:  ns,
+		K8sVersion: k8sVersion,
 		VzSpec: &vizierconfigpb.VizierSpec{
 			Version:               vz.Spec.Version,
 			DeployKey:             vz.Spec.DeployKey,
@@ -745,6 +837,7 @@ func generateVizierYAMLsConfig(ctx context.Context, ns string, vz *v1alpha1.Vizi
 					Requests: convertResourceType(vz.Spec.Pod.Resources.Requests),
 				},
 				NodeSelector: vz.Spec.Pod.NodeSelector,
+				Tolerations:  convertTolerations(vz.Spec.Pod.Tolerations),
 			},
 			Patches:  vz.Spec.Patches,
 			Registry: vz.Spec.Registry,
@@ -871,7 +964,27 @@ func updateResourceRequirements(requirements v1.ResourceRequirements, res map[st
 		castedContainer["resources"] = resources
 	}
 }
-func updatePodSpec(nodeSelector map[string]string, securityCtx *v1alpha1.PodSecurityContext, res map[string]interface{}) {
+
+func convertTolerations(tolerations []v1.Toleration) []*vizierconfigpb.Toleration {
+	var castedTolerations []*vizierconfigpb.Toleration
+	for _, toleration := range tolerations {
+		castedToleration := &vizierconfigpb.Toleration{
+			Key:      toleration.Key,
+			Operator: string(toleration.Operator),
+			Value:    toleration.Value,
+			Effect:   string(toleration.Effect),
+		}
+		if toleration.TolerationSeconds != nil {
+			castedToleration.TolerationSeconds = &types.Int64Value{Value: *toleration.TolerationSeconds}
+		}
+		castedTolerations = append(castedTolerations, castedToleration)
+	}
+	return castedTolerations
+}
+
+func updatePodSpec(nodeSelector map[string]string, tolerations []v1.Toleration, securityCtx *v1alpha1.PodSecurityContext, res map[string]interface{}) {
+	kind, kOk := res["kind"].(string)
+
 	podSpec := make(map[string]interface{})
 	md, ok, err := unstructured.NestedFieldNoCopy(res, "spec", "template", "spec")
 	if ok && err == nil {
@@ -880,18 +993,22 @@ func updatePodSpec(nodeSelector map[string]string, securityCtx *v1alpha1.PodSecu
 		}
 	}
 
-	castedNodeSelector := make(map[string]interface{})
-	ns, ok := podSpec["nodeSelector"].(map[string]interface{})
-	if ok {
-		castedNodeSelector = ns
-	}
-	for k, v := range nodeSelector {
-		if _, ok := castedNodeSelector[k]; ok {
-			continue
+	if kOk && !slices.Contains(nodeSelectorExcludedKinds, kind) {
+		castedNodeSelector := make(map[string]interface{})
+		ns, ok := podSpec["nodeSelector"].(map[string]interface{})
+		if ok {
+			castedNodeSelector = ns
 		}
-		castedNodeSelector[k] = v
+		for k, v := range nodeSelector {
+			if _, ok := castedNodeSelector[k]; ok {
+				continue
+			}
+			castedNodeSelector[k] = v
+		}
+		podSpec["nodeSelector"] = castedNodeSelector
 	}
-	podSpec["nodeSelector"] = castedNodeSelector
+
+	podSpec["tolerations"] = tolerations
 
 	// Add securityContext only if enabled.
 	if securityCtx == nil || !securityCtx.Enabled {

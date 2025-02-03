@@ -14,26 +14,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-directory '/opt/golang' do
-  recursive true
-  action :delete
-end
-
-directory '/opt/golang' do
+directory '/opt/px_dev/tools/golang' do
   owner node['owner']
   group node['group']
   mode '0755'
-  action :create
+  recursive true
+  action [:delete, :create]
 end
 
 remote_file '/tmp/golang.tar.gz' do
   source node['golang']['download_path']
-  mode 0644
+  mode '0644'
   checksum node['golang']['sha256']
 end
 
 execute 'install_golang' do
-   command 'tar xf /tmp/golang.tar.gz -C /opt/golang --strip-components 1'
+   command 'tar xf /tmp/golang.tar.gz -C /opt/px_dev/tools/golang --strip-components 1'
    action :run
  end
 
@@ -41,14 +37,19 @@ file '/tmp/golang.tar.gz' do
   action :delete
 end
 
-ENV['PATH'] = "/opt/golang/bin:#{ENV['PATH']}"
+ENV['PATH'] = "/opt/px_dev/tools/golang/bin:#{ENV['PATH']}"
 
 execute 'install go binaries' do
   ENV['GOPATH'] = "/opt/px_dev/gopath"
   command %(go install github.com/golang/mock/mockgen@v1.5.0 && \
-            go install github.com/cheekybits/genny@v1.0.0 && \
             go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.4.1 && \
             go install k8s.io/code-generator/cmd/client-gen@v0.20.6 && \
             go install github.com/go-bindata/go-bindata/go-bindata@v3.1.2+incompatible && \
+            go install github.com/google/go-containerregistry/cmd/crane@v0.15.2 && \
+            go install github.com/sigstore/cosign/v2/cmd/cosign@v2.0.2 && \
+            go install github.com/regclient/regclient/cmd/regctl@v0.4.8 && \
+            go install github.com/regclient/regclient/cmd/regsync@v0.4.8 && \
+            go install github.com/regclient/regclient/cmd/regbot@v0.4.8 && \
+            go clean -modcache && \
             go clean -cache)
 end

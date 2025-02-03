@@ -230,7 +230,7 @@ func (p *requestProxyer) run() error {
 
 				// These errors happen frequently, for example, if a Kelvin isn't ready for a cluster yet, or there is slight clock skew on the Vizier. Do not log an error in these situations.
 				if !strings.Contains(err.Error(), "InvalidArgument") && !strings.Contains(err.Error(), "Unauthenticated") {
-					log.WithError(err).Error("Failed to process nats message")
+					log.WithField("vizier", p.clusterID).WithError(err).Error("Failed to process nats message")
 				}
 				// Try to cancel stream.
 				if cancelErr := p.sendCancelMessageToVizier(); cancelErr != nil {
@@ -264,47 +264,40 @@ func (p *requestProxyer) processNatsMsg(msg *nats.Msg) error {
 	v2c := cvmsgspb.V2CMessage{}
 	err := v2c.Unmarshal(msg.Data)
 	if err != nil {
-		log.WithError(err).Error("Failed to unmarshall response, bailing...")
-		return err
+		return fmt.Errorf("Failed to unmarshall v2cMessage: %w", err)
 	}
 
 	resp := cvmsgspb.V2CAPIStreamResponse{}
 	err = types.UnmarshalAny(v2c.Msg, &resp)
 	if err != nil {
-		log.WithError(err).Error("Failed to unmarshall response, bailing...")
-		return err
+		return fmt.Errorf("Failed to unmarshall v2cAPIStreamResponse: %w", err)
 	}
 
 	switch parsed := resp.Msg.(type) {
 	case *cvmsgspb.V2CAPIStreamResponse_ExecResp:
 		err = p.srv.SendMsg(parsed.ExecResp)
 		if err != nil {
-			log.WithError(err).Error("Failed to send message")
-			return err
+			return fmt.Errorf("Failed to send ExecResp message: %w", err)
 		}
 	case *cvmsgspb.V2CAPIStreamResponse_HcResp:
 		err = p.srv.SendMsg(parsed.HcResp)
 		if err != nil {
-			log.WithError(err).Error("Failed to send message")
-			return err
+			return fmt.Errorf("Failed to send HcResp message: %w", err)
 		}
 	case *cvmsgspb.V2CAPIStreamResponse_GenerateOTelScriptResp:
 		err = p.srv.SendMsg(parsed.GenerateOTelScriptResp)
 		if err != nil {
-			log.WithError(err).Error("Failed to send message")
-			return err
+			return fmt.Errorf("Failed to send GenerateOTelScriptResp message: %w", err)
 		}
 	case *cvmsgspb.V2CAPIStreamResponse_DebugLogResp:
 		err = p.srv.SendMsg(parsed.DebugLogResp)
 		if err != nil {
-			log.WithError(err).Error("Failed to send message")
-			return err
+			return fmt.Errorf("Failed to send DebugLogResp message: %w", err)
 		}
 	case *cvmsgspb.V2CAPIStreamResponse_DebugPodsResp:
 		err = p.srv.SendMsg(parsed.DebugPodsResp)
 		if err != nil {
-			log.WithError(err).Error("Failed to send message")
-			return err
+			return fmt.Errorf("Failed to send DebugPodsResp message: %w", err)
 		}
 	case *cvmsgspb.V2CAPIStreamResponse_Status:
 		// Status message come when the stream is closed.

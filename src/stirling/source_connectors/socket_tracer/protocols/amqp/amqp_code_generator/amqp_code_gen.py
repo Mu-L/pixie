@@ -68,13 +68,13 @@ class FieldType(Enum):
     def get_field_extract_function(field_type):
         extract_function_c_mapping = {
             FieldType.octet: "decoder->ExtractChar<uint8_t>()",
-            FieldType.short: "decoder->ExtractInt<uint16_t>()",
-            FieldType.long: "decoder->ExtractInt<uint32_t>()",
-            FieldType.longlong: "decoder->ExtractInt<uint64_t>()",
+            FieldType.short: "decoder->ExtractBEInt<uint16_t>()",
+            FieldType.long: "decoder->ExtractBEInt<uint32_t>()",
+            FieldType.longlong: "decoder->ExtractBEInt<uint64_t>()",
             FieldType.shortstr: "ExtractShortString(decoder)",
             FieldType.longstr: "ExtractLongString(decoder)",
             FieldType.table: "ExtractLongString(decoder)",
-            FieldType.timestamp: "decoder->ExtractInt<time_t>()",
+            FieldType.timestamp: "decoder->ExtractBEInt<time_t>()",
         }
         return extract_function_c_mapping[field_type]
 
@@ -125,7 +125,7 @@ class Field:
         The field name is used as json key to be close to the key used in spec
         """
         if self.field_type == FieldType.table:
-            return f"// TODO: support KV for {self.field_name} field table type"
+            return f"// TODO(vsrivatsa): support KV for {self.field_name} field table type"
         return f'builder->WriteKV("{self.c_field_name}", {self.c_field_name});'
 
     def gen_buffer_extract(self):
@@ -133,19 +133,19 @@ class Field:
         This will be included as list of commands in
         StatusOr<FetchReq> BinaryDecoder::ExtractFetchReq(BinaryDecoder* decoder, Request* req) {
             FetchReq r;
-            PL_ASSIGN_OR_RETURN(r.replica_id, decoder->ExtractInt32());
+            PX_ASSIGN_OR_RETURN(r.replica_id, decoder->ExtractInt32());
             ...
             return r;
         }
         """
         extract_function = FieldType.get_field_extract_function(self.field_type)
-        return f"PL_ASSIGN_OR_RETURN(r.{self.c_field_name}, {extract_function});"
+        return f"PX_ASSIGN_OR_RETURN(r.{self.c_field_name}, {extract_function});"
 
     def gen_buffer_extract_bit(self, index):
         """
         The bit type in AMQP packs multiple values into a single octet
         """
-        return f"PL_ASSIGN_OR_RETURN(r.{self.c_field_name}, ExtractNthBit(decoder, {index}));"
+        return f"PX_ASSIGN_OR_RETURN(r.{self.c_field_name}, ExtractNthBit(decoder, {index}));"
 
     def get_class_buffer_extract(self, index):
         """
@@ -155,7 +155,7 @@ class Field:
         extract_function = FieldType.get_field_extract_function(self.field_type)
         return f"""
             if((property_flags >> {index}) & 1) {{
-                PL_ASSIGN_OR_RETURN(r.{self.c_field_name}, {extract_function});
+                PX_ASSIGN_OR_RETURN(r.{self.c_field_name}, {extract_function});
             }}
             """
 
@@ -207,7 +207,7 @@ class AMQPMethod:
         """
         Extracts the fields from the buffer and assigns them to the struct.
         Ex:
-        PL_ASSIGN_OR_RETURN(r.replica_id, decoder->ExtractInt32());
+        PX_ASSIGN_OR_RETURN(r.replica_id, decoder->ExtractInt32());
 
         For bit type, consecutive bits are extracted and compacted into a single octet.
         If there are more than 8 bits, it flows into the next octet.
@@ -304,8 +304,8 @@ class AMQPMethod:
         return f"""
             Status Extract{self.c_struct_name}(BinaryDecoder* decoder, Frame* frame) {{
                 {self.c_struct_name} r;
-                PL_ASSIGN_OR_RETURN(r.body_size, decoder->ExtractInt<uint64_t>());
-                PL_ASSIGN_OR_RETURN(uint16_t property_flags, decoder->ExtractInt<uint16_t>());
+                PX_ASSIGN_OR_RETURN(r.body_size, decoder->ExtractBEInt<uint64_t>());
+                PX_ASSIGN_OR_RETURN(uint16_t property_flags, decoder->ExtractBEInt<uint16_t>());
                 r.property_flags = property_flags;
                 {field_buffer_extractions}
                 frame->msg = ToString(r);
@@ -671,8 +671,8 @@ class CodeGenerator:
         amqp_extract_class_case_str = "\n".join(amqp_extract_class_case)
         return f"""
         Status ProcessFrameMethod(BinaryDecoder* decoder, Frame* req) {{
-            PL_ASSIGN_OR_RETURN(uint16_t class_id, decoder->ExtractInt<uint16_t>());
-            PL_ASSIGN_OR_RETURN(uint16_t method_id, decoder->ExtractInt<uint16_t>());
+            PX_ASSIGN_OR_RETURN(uint16_t class_id, decoder->ExtractBEInt<uint16_t>());
+            PX_ASSIGN_OR_RETURN(uint16_t method_id, decoder->ExtractBEInt<uint16_t>());
 
             req->class_id = class_id;
             req->method_id = method_id;
@@ -694,7 +694,7 @@ class CodeGenerator:
             AMQPFrameTypes amqp_frame_type = static_cast<AMQPFrameTypes>(req->frame_type);
             switch (amqp_frame_type) {
                 case AMQPFrameTypes::kFrameHeader:
-                    return ProcessContentHeader(&decoder, req);
+                    return ProcessContentHeader(decoder, req);
                 case AMQPFrameTypes::kFrameBody: {
                     req->msg = "";
                     auto status = decoder->ExtractBufIgnore(req->payload_size);
@@ -707,7 +707,7 @@ class CodeGenerator:
                     req->msg = "";
                     break; // Heartbeat frames have no body or length
                 case AMQPFrameTypes::kFrameMethod:
-                    return ProcessFrameMethod(&decoder, req);
+                    return ProcessFrameMethod(decoder, req);
                 default:
                     VLOG(1) << absl::Substitute("Unparsed frame $0", req->frame_type);
             }
@@ -726,8 +726,8 @@ class CodeGenerator:
         amqp_extract_class_case_str = "\n".join(amqp_extract_class_case)
         return f"""
         Status ProcessContentHeader(BinaryDecoder* decoder, Frame* req) {{
-            PL_ASSIGN_OR_RETURN(uint16_t class_id, decoder->ExtractInt<uint16_t>());
-            PL_ASSIGN_OR_RETURN(uint16_t weight, decoder->ExtractInt<uint16_t>());
+            PX_ASSIGN_OR_RETURN(uint16_t class_id, decoder->ExtractBEInt<uint16_t>());
+            PX_ASSIGN_OR_RETURN(uint16_t weight, decoder->ExtractBEInt<uint16_t>());
             req->class_id = class_id;
 
             if(weight != 0) {{

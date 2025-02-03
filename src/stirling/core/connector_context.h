@@ -46,6 +46,11 @@ class ConnectorContext {
   virtual uint32_t GetASID() const = 0;
 
   /**
+   * Return true if the UPID is in context.
+   */
+  virtual bool UPIDIsInContext(const md::UPID& upid) const = 0;
+
+  /**
    * Return current set of active UPIDs.
    */
   virtual const absl::flat_hash_set<md::UPID>& GetUPIDs() const = 0;
@@ -67,6 +72,8 @@ class ConnectorContext {
    * tracing.
    */
   virtual std::vector<CIDRBlock> GetClusterCIDRs() = 0;
+
+  virtual void RefreshUPIDList() = 0;
 };
 
 /**
@@ -86,6 +93,10 @@ class AgentContext : public ConnectorContext {
 
   uint32_t GetASID() const override { return agent_metadata_state_->asid(); }
 
+  bool UPIDIsInContext(const md::UPID& upid) const override {
+    return agent_metadata_state_->upids().contains(upid);
+  }
+
   const absl::flat_hash_set<md::UPID>& GetUPIDs() const override {
     return agent_metadata_state_->upids();
   }
@@ -99,6 +110,8 @@ class AgentContext : public ConnectorContext {
   }
 
   std::vector<CIDRBlock> GetClusterCIDRs() override;
+
+  void RefreshUPIDList() override{};
 
  private:
   std::shared_ptr<const md::AgentMetadataState> agent_metadata_state_;
@@ -115,6 +128,8 @@ class StandaloneContext : public ConnectorContext {
 
   uint32_t GetASID() const override { return 0; }
 
+  bool UPIDIsInContext(const md::UPID& upid) const override { return upids_.contains(upid); }
+
   const absl::flat_hash_set<md::UPID>& GetUPIDs() const override { return upids_; }
 
   const absl::flat_hash_map<md::UPID, md::PIDInfoUPtr>& GetPIDInfoMap() const override {
@@ -129,6 +144,8 @@ class StandaloneContext : public ConnectorContext {
   std::vector<CIDRBlock> GetClusterCIDRs() override { return cidrs_; }
 
   Status SetClusterCIDR(std::string_view cidr_str);
+
+  void RefreshUPIDList() override{};
 
  protected:
   absl::flat_hash_set<md::UPID> upids_;
@@ -145,6 +162,16 @@ class SystemWideStandaloneContext : public StandaloneContext {
  public:
   explicit SystemWideStandaloneContext(
       const std::filesystem::path& proc_path = ::px::system::ProcPath());
+};
+
+/**
+ * Trace everything. Does NOT filter by whether or not the PID was found in /proc.
+ * Useful to trace short lived processes (which SystemWideStandaloneContext may not).
+ */
+class EverythingLocalContext : public SystemWideStandaloneContext {
+ public:
+  bool UPIDIsInContext(const md::UPID& /*upid*/) const override { return true; }
+  void RefreshUPIDList() override;
 };
 
 }  // namespace stirling

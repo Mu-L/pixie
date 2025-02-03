@@ -11,6 +11,7 @@ To update this README, run `make update_readme` in this directory.
 - bpftrace/[md_flush](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/md_flush): Traces flushes at the md driver level, and prints details.
 - bpftrace/[nap_time](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/nap_time): Tracing application sleeps via the nanosleep(2) syscall.
 - bpftrace/[oom_kill](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/oom_kill): Traces the Linux out-of-memory (OOM) killer and shows basic details on one line per OOM kill.
+- bpftrace/[socket_size](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/socket_size): Shows info and size stats for socket I/O requests.
 - bpftrace/[sync_snoop](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/sync_snoop): Tracing file system sync events.
 - bpftrace/[tcp_drops](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/tcp_drops): Shows TCP drop counts in the cluster.
 - bpftrace/[tcp_retransmits](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/bpftrace/tcp_retransmits): Shows TCP retransmission counts in the cluster.
@@ -18,6 +19,7 @@ To update this README, run `make update_readme` in this directory.
 - px/[amqp_data](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/amqp_data): Shows a sample of amqp messages in the cluster.
 - px/[cluster](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/cluster): This view lists the namespaces and the node that are available on the current cluster.
 - px/[cql_data](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/cql_data): Shows a sample of CQL (Cassandra) requests in the cluster.
+- px/[cql_flow_graph](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/cql_flow_graph): Graph of Cassandra messages in the cluster, with latency stats.
 - px/[cql_stats](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/cql_stats): This live view calculates the latency, error rate, and throughput of a pod's CQL (Cassandra) requests.
 - px/[dns_data](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/dns_data): Show a sample of DNS traffic in the cluster.
 - px/[dns_flow_graph](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/dns_flow_graph): Overview of DNS requests in the cluster, with latency stats.
@@ -27,6 +29,7 @@ To update this README, run `make update_readme` in this directory.
 - px/[http_data_filtered](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/http_data_filtered): Show a sample of HTTP requests in the Cluster filtered by service, pod, request path & response status code.
 - px/[http_post_requests](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/http_post_requests): Show a sample of HTTP requests in the Cluster that have method POST.
 - px/[http_request_stats](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/http_request_stats): HTTP request statistics aggregated by Service
+- px/[http_trace_id](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/http_trace_id): Shows HTTP requests with trace IDs in the cluster. Allows configuring which header contains the trace ID and filtering requests by trace ID.
 - px/[inbound_conns](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/inbound_conns): Shows a list of connections originating from endpoints outside the k8s cluster.
 - px/[ip](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/ip): This view displays a summary of the traffic from the cluster to the input IP address.
 - px/[jvm_data](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/jvm_data): JVM stats for Java processes running on the cluster
@@ -73,8 +76,6 @@ To update this README, run `make update_readme` in this directory.
 - px/[sql_queries](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/sql_queries): This live view calculates the latency, error rate, and throughput of each distinct normalized SQL Query. Only supports Postgres or MySQL.
 - px/[sql_query](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/sql_query): This live view calculates the latency, error rate, and throughput of each distinct parameter set for a given normalized SQL query. Only supports PostgresSQL or MySQL.
 - px/[stirling_errors](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/stirling_errors): Shows errors in different Stirling components and deployment statuses of eBPF probes.
-- px/[tcp_drops](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/tcp_drops): Shows TCP drop counts in the cluster.
-- px/[tcp_retransmits](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/tcp_retransmits): Shows TCP retransmission counts in the cluster.
 - px/[tracepoint_status](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/tracepoint_status): Returns information about tracepoints running on the cluster.
 - px/[upids](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/px/upids): Shows a list of UPIDs running in a given namespace.
 - pxbeta/[pii_cluster_egress](https://github.com/pixie-io/pixie/tree/main/src/pxl_scripts/pxbeta/pii_cluster_egress): This view displays a summary of traffic containing PII from the cluster to external endpoints.

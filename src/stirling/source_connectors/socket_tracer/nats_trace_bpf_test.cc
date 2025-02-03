@@ -19,7 +19,8 @@
 #include "src/common/testing/test_utils/container_runner.h"
 #include "src/common/testing/testing.h"
 #include "src/stirling/source_connectors/socket_tracer/socket_trace_connector.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/nats_client_container.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/nats_server_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 
 namespace px {
@@ -47,7 +48,7 @@ class NATSTraceBPFTest : public testing::SocketTraceBPFTestFixture</* TClientSid
       args = {"--tls", "--tlscert=/etc/ssl/server.crt", "--tlskey=/etc/ssl/server.key",
               "--tlsverify=false"};
     }
-    PL_CHECK_OK(server_container_.Run(std::chrono::seconds{150}, /*options*/ {}, args));
+    PX_CHECK_OK(server_container_.Run(std::chrono::seconds{150}, /*options*/ {}, args));
   }
 
   ::px::stirling::testing::NATSServerContainer server_container_;

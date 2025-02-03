@@ -19,7 +19,8 @@
 #include "src/common/testing/testing.h"
 #include "src/stirling/core/output.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/client_server_system.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/curl_container.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/nginx_openssl_1_1_1_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/common.h"
 
@@ -68,7 +69,7 @@ TEST_F(ConnStatsBPFTest, UnclassifiedEvents) {
 
   std::vector<TaggedRecordBatch> tablets = ConsumeRecords(SocketTraceConnector::kConnStatsTableNum);
   ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& rb, tablets);
-  // PL_LOG_VAR(PrintConnStatsTable(rb));
+  // PX_LOG_VAR(PrintConnStatsTable(rb));
 
   // Check server-side stats.
   {
@@ -302,7 +303,7 @@ TEST_F(ConnStatsMidConnBPFTest, InferRemoteEndpointAndReport) {
   std::vector<TaggedRecordBatch> tablets = ConsumeRecords(SocketTraceConnector::kConnStatsTableNum);
 
   ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& rb, tablets);
-  // PL_LOG_VAR(PrintConnStatsTable(rb));
+  // PX_LOG_VAR(PrintConnStatsTable(rb));
 
   // Check client-side.
   {
@@ -351,7 +352,7 @@ TEST_F(ConnStatsBPFTest, SSLConnections) {
   // Run the nginx HTTPS server.
   // The container runner will make sure it is in the ready state before unblocking.
   StatusOr<std::string> run_result = server.Run(std::chrono::seconds{60});
-  PL_CHECK_OK(run_result);
+  PX_CHECK_OK(run_result);
 
   // Sleep an additional second, just to be safe.
   sleep(1);
@@ -364,9 +365,9 @@ TEST_F(ConnStatsBPFTest, SSLConnections) {
   // To take an exception and make the SSL connection anyways, we use the --insecure flag.
 
   // Run the client in the network of the server, so they can connect to each other.
-  PL_CHECK_OK(client.Run(std::chrono::seconds{60},
+  PX_CHECK_OK(client.Run(std::chrono::seconds{60},
                          {absl::Substitute("--network=container:$0", server.container_name())},
-                         {"--insecure", "-s", "-S", "https://localhost:443/index.html"}));
+                         {"--insecure", "-s", "-S", "https://127.0.0.1:443/index.html"}));
   client.Wait();
 
   StopTransferDataThread();
@@ -376,7 +377,7 @@ TEST_F(ConnStatsBPFTest, SSLConnections) {
   std::vector<TaggedRecordBatch> tablets = ConsumeRecords(SocketTraceConnector::kConnStatsTableNum);
   ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& rb, tablets);
   types::ColumnWrapperRecordBatch records = FindRecordsMatchingPID(rb, kUPIDIdx, server_pid);
-  // PL_LOG_VAR(PrintConnStatsTable(records));
+  // PX_LOG_VAR(PrintConnStatsTable(records));
 
   // Check server-side stats.
   {
@@ -404,7 +405,8 @@ TEST_F(ConnStatsBPFTest, SSLConnections) {
     //               we're counting the plaintext bytes (because that's what we trace).
     //               bytes_sent/bytes_rcvd should be 2730 and 1029 respectively
     //               once we perform our accounting on encrypted data.
-    EXPECT_THAT(bytes_sent, 2497);
+    // The TLS handshake has 4 less bytes when using 127.0.0.1 instead of localhost.
+    EXPECT_THAT(bytes_sent, 2486);
     EXPECT_THAT(bytes_rcvd, 698);
     EXPECT_THAT(addr_family, static_cast<int>(SockAddrFamily::kIPv4));
     EXPECT_THAT(protocol, kProtocolHTTP);

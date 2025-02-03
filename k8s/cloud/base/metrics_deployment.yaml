@@ -11,11 +11,16 @@ spec:
     metadata:
       labels:
         name: metrics-server
+        monitoring.gke.io/scrape: 'true'
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '50801'
+        prometheus.io/scheme: 'http'
     spec:
       containers:
       - name: metrics-server
         imagePullPolicy: IfNotPresent
-        image: gcr.io/pixie-oss/pixie-dev/cloud/metrics_server_image
+        image: cloud-metrics_server_image
         ports:
         - containerPort: 50800
           name: http2
@@ -50,6 +55,20 @@ spec:
         - name: bq-access-sa
           mountPath: /creds
           readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10100
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
       - name: certs
         secret:

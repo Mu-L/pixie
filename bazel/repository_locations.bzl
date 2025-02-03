@@ -16,16 +16,18 @@
 
 REPOSITORY_LOCATIONS = dict(
     bazel_gazelle = dict(
-        sha256 = "501deb3d5695ab658e82f6f6f549ba681ea3ca2a5fb7911154b5aa45596183fa",
+        sha256 = "d76bf7a60fd8b050444090dfa2837a4eaf9829e1165618ee35dceca5cbdf58d5",
         urls = [
-            "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.26.0/bazel-gazelle-v0.26.0.tar.gz",
-            "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.26.0/bazel-gazelle-v0.26.0.tar.gz",
+            "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.37.0/bazel-gazelle-v0.37.0.tar.gz",
+            "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.37.0/bazel-gazelle-v0.37.0.tar.gz",
         ],
     ),
     bazel_skylib = dict(
-        sha256 = "710c2ca4b4d46250cdce2bf8f5aa76ea1f0cba514ab368f2988f70e864cfaf51",
-        strip_prefix = "bazel-skylib-1.2.1",
-        urls = ["https://github.com/bazelbuild/bazel-skylib/archive/refs/tags/1.2.1.tar.gz"],
+        sha256 = "f7be3474d42aae265405a592bb7da8e171919d74c16f082a5457840f06054728",
+        urls = [
+            "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.2.1/bazel-skylib-1.2.1.tar.gz",
+            "https://github.com/bazelbuild/bazel-skylib/releases/download/1.2.1/bazel-skylib-1.2.1.tar.gz",
+        ],
     ),
     # Must be called boringssl to make sure the deps pick it up correctly.
     boringssl = dict(
@@ -35,9 +37,9 @@ REPOSITORY_LOCATIONS = dict(
                 "archive/7b00d84b025dff0c392c2df5ee8aa6d3c63ad539.tar.gz"],
     ),
     com_github_antlr_antlr4 = dict(
-        urls = ["https://github.com/antlr/antlr4/archive/refs/tags/4.9.2.tar.gz"],
-        strip_prefix = "antlr4-4.9.2",
-        sha256 = "6c86ebe2f3583ac19b199e704bdff9d70379f12347f7f2f1efa38051cd9a18cf",
+        urls = ["https://github.com/antlr/antlr4/archive/refs/tags/4.11.1.tar.gz"],
+        strip_prefix = "antlr4-4.11.1",
+        sha256 = "81f87f03bb83b48da62e4fc8bfdaf447efb9fb3b7f19eb5cbc37f64e171218cf",
     ),
     com_github_antlr_grammars_v4 = dict(
         urls = ["https://github.com/antlr/grammars-v4/archive/e53d7a1228505bfc80d8637808ef60e7eea92cc2.tar.gz"],
@@ -60,19 +62,14 @@ REPOSITORY_LOCATIONS = dict(
         urls = ["https://github.com/arun11299/cpp-jwt/archive/refs/tags/v1.1.1.tar.gz"],
     ),
     com_github_bazelbuild_buildtools = dict(
-        sha256 = "d368c47bbfc055010f118efb2962987475418737e901f7782d2a966d1dc80296",
-        strip_prefix = "buildtools-4.2.5",
-        urls = ["https://github.com/bazelbuild/buildtools/archive/refs/tags/4.2.5.tar.gz"],
+        sha256 = "39c59cb5352892292cbe3174055aac187edcb5324c9b4e2d96cb6e40bd753877",
+        strip_prefix = "buildtools-7.1.2",
+        urls = ["https://github.com/bazelbuild/buildtools/archive/refs/tags/v7.1.2.tar.gz"],
     ),
     com_github_cameron314_concurrentqueue = dict(
         sha256 = "eb37336bf9ae59aca7b954db3350d9b30d1cab24b96c7676f36040aa76e915e8",
         strip_prefix = "concurrentqueue-1.0.3",
         urls = ["https://github.com/cameron314/concurrentqueue/archive/refs/tags/v1.0.3.tar.gz"],
-    ),
-    com_github_cmcqueen_aes_min = dict(
-        sha256 = "dd82d23976695d857924780c262952cdb12ddbb56e6bdaf5a2270dccc851d279",
-        strip_prefix = "aes-min-0.3.1",
-        urls = ["https://github.com/cmcqueen/aes-min/releases/download/0.3.1/aes-min-0.3.1.tar.gz"],
     ),
     com_github_cyan4973_xxhash = dict(
         sha256 = "952ebbf5b11fbf59ae5d760a562d1e9112278f244340ad7714e8556cbe54f7f7",
@@ -130,10 +127,10 @@ REPOSITORY_LOCATIONS = dict(
         urls = ["https://github.com/h2o/picohttpparser/archive/1d2b8a184e7ebe6651c30dcede37ba1d89691351.tar.gz"],
     ),
     com_github_iovisor_bcc = dict(
-        sha256 = "46eac44c0cf68a94bafe01088081b71606982936ccdfe2808fcd28e0cc131ba8",
-        strip_prefix = "bcc-6bfdb074c276be69ace19da376a689d1dbb4963f",
+        sha256 = "416426fbe22d617d8aed088062f4489e69176136e99dc0b933df58e83d9175da",
+        strip_prefix = "bcc-e57be8465b9cf238f1c04b1c7e154fd1db85326d",
         urls = [
-            "https://github.com/pixie-io/bcc/archive/6bfdb074c276be69ace19da376a689d1dbb4963f.tar.gz",
+            "https://github.com/pixie-io/bcc/archive/e57be8465b9cf238f1c04b1c7e154fd1db85326d.tar.gz",
         ],
     ),
     com_github_iovisor_bpftrace = dict(
@@ -149,16 +146,21 @@ REPOSITORY_LOCATIONS = dict(
         urls = ["https://github.com/jupp0r/prometheus-cpp/archive/81e208c250748657f1d5dab247e82c4429a931af.tar.gz"],
     ),
     com_github_libbpf_libbpf = dict(
-        sha256 = "3d6afde67682c909e341bf194678a8969f17628705af25f900d5f68bd299cb03",
-        strip_prefix = "libbpf-1.0.1",
+        sha256 = "859a31e9101237338d46eb62a62cb8fcb342c9ce0f9b9137e5a3a728c088c338",
+        strip_prefix = "libbpf-42065ea6627ff6e1ab4c65e51042a70fbf30ff7c",
         urls = [
-            "https://github.com/libbpf/libbpf/archive/refs/tags/v1.0.1.tar.gz",
+            "https://github.com/libbpf/libbpf/archive/42065ea6627ff6e1ab4c65e51042a70fbf30ff7c.tar.gz",
         ],
     ),
     com_github_libuv_libuv = dict(
         sha256 = "371e5419708f6aaeb8656671f89400b92a9bba6443369af1bb70bcd6e4b3c764",
         strip_prefix = "libuv-1.42.0",
         urls = ["https://github.com/libuv/libuv/archive/refs/tags/v1.42.0.tar.gz"],
+    ),
+    com_github_mongodb_mongo_c_driver = dict(
+        sha256 = "fdb9de045efabedf67b0ac8d7e77006705b22d954579567af75d440fd0a2c5e1",
+        strip_prefix = "mongo-c-driver-1.24.0",
+        urls = ["https://github.com/mongodb/mongo-c-driver/archive/refs/tags/1.24.0.tar.gz"],
     ),
     com_github_nats_io_natsc = dict(
         sha256 = "16e700d912034faefb235a955bd920cfe4d449a260d0371b9694d722eb617ae1",
@@ -174,15 +176,10 @@ REPOSITORY_LOCATIONS = dict(
         sha256 = "87b5884741427220d3a33df1363ae0e8b898099fbc59f1c451113f6732891014",
         urls = ["https://github.com/nlohmann/json/releases/download/v3.7.3/include.zip"],
     ),
-    com_github_openssl_openssl = dict(
-        sha256 = "9f54d42aed56f62889e8384895c968e24d57eae701012776d5f18fb9f2ae48b0",
-        strip_prefix = "openssl-openssl-3.0.2",
-        urls = ["https://github.com/openssl/openssl/archive/refs/tags/openssl-3.0.2.tar.gz"],
-    ),
     com_github_opentelemetry_proto = dict(
-        urls = ["https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v0.10.0.tar.gz"],
-        strip_prefix = "opentelemetry-proto-0.10.0",
-        sha256 = "f1004a49f40d7acb43e86b1fd95f73e80c778acb163e309bba86f0cbd7fa8a71",
+        urls = ["https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.3.2.tar.gz"],
+        strip_prefix = "opentelemetry-proto-1.3.2",
+        sha256 = "c069c0d96137cf005d34411fa67dd3b6f1f8c64af1e7fb2fe0089a41c425acd7",
     ),
     com_github_packetzero_dnsparser = dict(
         sha256 = "bdf6c7f56f33725c1c32e672a4779576fb639dd2df565115778eb6be48296431",
@@ -195,19 +192,19 @@ REPOSITORY_LOCATIONS = dict(
         sha256 = "b80d88f447566733f887a2c21ad6072751297459e79fa5acfc99e5db3a9418a1",
     ),
     com_github_rlyeh_sole = dict(
-        sha256 = "ff82a1d6071cbc9c709864266210ddedecdb2b1e507ac5e7c4290ca6453e89b3",
-        strip_prefix = "sole-1.0.2",
-        urls = ["https://github.com/r-lyeh-archived/sole/archive/refs/tags/1.0.2.tar.gz"],
+        sha256 = "70dbd71f2601963684195f4c7d8a1c2d45a0d53114bc4d06f8cebe6d3d3ffa69",
+        strip_prefix = "sole-95612e5cda1accc0369a51edfe0f32bfb4bee2a0",
+        urls = ["https://github.com/r-lyeh-archived/sole/archive/95612e5cda1accc0369a51edfe0f32bfb4bee2a0.tar.gz"],
     ),
     com_github_serge1_elfio = dict(
-        sha256 = "de0bb37885cc041a00e3b27353125361716fc4a49bd6ce6ed5782a1e8d4ee137",
-        strip_prefix = "ELFIO-2bdb28ae5d02db994a32cda401489e68c2887a4d",
-        urls = ["https://github.com/pixie-io/ELFIO/archive/2bdb28ae5d02db994a32cda401489e68c2887a4d.tar.gz"],
+        sha256 = "17ed6c4ca076be0ba6c3b1dcdae8c7aae9029f70a470be5fbc58526c96b9df05",
+        strip_prefix = "ELFIO-98d87a350f2384ce22b5dc72c79312a6854d88d4",
+        urls = ["https://github.com/pixie-io/ELFIO/archive/98d87a350f2384ce22b5dc72c79312a6854d88d4.tar.gz"],
     ),
     com_github_simdutf_simdutf = dict(
-        urls = ["https://github.com/simdutf/simdutf/archive/refs/tags/v1.0.0.tar.gz"],
-        strip_prefix = "simdutf-1.0.0",
-        sha256 = "a91056e53e566070068203b77a4607fec41920b923712464cf54e12a760cd0a6",
+        urls = ["https://github.com/simdutf/simdutf/archive/refs/tags/v4.0.3.zip"],
+        strip_prefix = "simdutf-4.0.3",
+        sha256 = "a7f468fdb4355259ed81d4e97434abcea85098986592c4f6012b9d208b8734fe",
     ),
     com_github_tencent_rapidjson = dict(
         sha256 = "4a34a0c21794f067afca6c9809971f0bd77a1d1834c4dc53bdd09e4ab4d05ce4",
@@ -290,23 +287,120 @@ REPOSITORY_LOCATIONS = dict(
         urls = ["https://github.com/oneapi-src/oneTBB/archive/e6104c9599f7f10473caf545199f7468c0a8e52f.tar.gz"],
     ),
     com_llvm_clang_15 = dict(
-        sha256 = "fa1198d6fcfb25a43b3ce326f14a874177ede9df1315c2826556742324fc6428",
-        urls = ["https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl8/clang-min-15.0-pl8.tar.gz"],
+        sha256 = "13924fc595146bf2480f8c853bb1b995ef511ee2d7eb6f5c19ab429e31caaf98",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/clang-min-15.0-pl12.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/clang-min-15.0-pl12.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
     ),
-    com_llvm_lib = dict(
-        sha256 = "9106b0694ec4f16e10425bab2357f861e32c3e49041f0bac51f56c5bba9ea966",
+    com_llvm_lib_x86_64_glibc_host = dict(
+        sha256 = "bd71e0fc496c10804840827161f183f2430304d2f272b622a3c101744c4799d2",
         strip_prefix = "",
-        urls = ["https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl8/llvm-15.0-pl8.tar.gz"],
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libstdc%2B%2B.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libstdc%2B%2B.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
     ),
-    com_llvm_lib_libcpp = dict(
-        sha256 = "041598998b833611efa0673c5a2795583257a4171b996ee50e2e130e60c439d7",
+    com_llvm_lib_libcpp_x86_64_glibc_host = dict(
+        sha256 = "f7c126bced889730b4b7f63a3c4290895ce8943d87b279558a6e7ed835eb1ef9",
         strip_prefix = "",
-        urls = ["https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl8/llvm-15.0-pl8-libcxx.tar.gz"],
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libcxx.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libcxx.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
     ),
-    com_llvm_libcxx = dict(
-        sha256 = "ef4db0e0e044e41377099ff5ae9570724006539020b8293d8bec76613141d81b",
+    com_llvm_lib_libcpp_x86_64_glibc_host_asan = dict(
+        sha256 = "c50fd3b3c9b359f1112646aed544f274d28372cb464bc3e1ad11e25c4da6ed3c",
         strip_prefix = "",
-        urls = ["https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl8/libcxx-15.0-pl8.tar.gz"],
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libcxx-asan.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libcxx-asan.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_lib_libcpp_x86_64_glibc_host_msan = dict(
+        sha256 = "b176a2df6f31f07bc4c2675c82523cf290cc29a037af33798ad6786b161ef570",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libcxx-msan.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libcxx-msan.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_lib_libcpp_x86_64_glibc_host_tsan = dict(
+        sha256 = "13ba581991271197a33aa35576d62ffa687e56b4799aadb8b91e4a30e1ebe57f",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libcxx-tsan.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libcxx-tsan.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_lib_x86_64_glibc2_36 = dict(
+        sha256 = "22dbfc1fe13c4809b7df94360f45d7ce2064bcd954ab642a7053c79f95fe21ad",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libstdc++-x86_64-sysroot.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libstdc++-x86_64-sysroot.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_lib_libcpp_x86_64_glibc2_36 = dict(
+        sha256 = "fba4ba91f794809fb74d8736a0b281589eb3faa1064a55b03f18fabea22d4318",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libcxx-x86_64-sysroot.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libcxx-x86_64-sysroot.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_lib_aarch64_glibc2_36 = dict(
+        sha256 = "a38c075733a18e59d41994e18ea0e4944779d8d971dc1f825dc52a81253c602e",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libstdc++-aarch64-sysroot.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libstdc++-aarch64-sysroot.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_lib_libcpp_aarch64_glibc2_36 = dict(
+        sha256 = "d8583cbd55a66c6ea2d53268b3ae4829dae6d9e16e5d8040646f2cf1b7d8cdde",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/llvm-15.0-pl12-libcxx-aarch64-sysroot.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/llvm-15.0-pl12-libcxx-aarch64-sysroot.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_libcxx_x86_64_glibc_host = dict(
+        sha256 = "12321054fa99b953ffde02a1b100e8ba1f16b3769f2db7623e19c0cac9d2185a",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/libcxx-15.0-pl12.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/libcxx-15.0-pl12.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_libcxx_x86_64_glibc2_36 = dict(
+        sha256 = "6f0e66ba3c580f9cd2950f6c978d87234e876b8de3cdb8b3f0f827b57bdf2b64",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/libcxx-15.0-pl12-x86_64-sysroot.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/libcxx-15.0-pl12-x86_64-sysroot.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
+    ),
+    com_llvm_libcxx_aarch64_glibc2_36 = dict(
+        sha256 = "f5d4b52a9c142f28f9e88e09ebd52c91f2749417e6dcda28e66c8b20688b9b1a",
+        strip_prefix = "",
+        urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/clang%2F15.0-pl12/libcxx-15.0-pl12-aarch64-sysroot.tar.gz",
+            "https://storage.googleapis.com/pixie-dev-public/clang/15.0-pl12/libcxx-15.0-pl12-aarch64-sysroot.tar.gz",
+        ],
+        manual_license_name = "llvm/llvm-project",
     ),
     com_oracle_openjdk_18 = dict(
         sha256 = "3bfdb59fc38884672677cebca9a216902d87fe867563182ae8bc3373a65a2ebd",
@@ -314,6 +408,7 @@ REPOSITORY_LOCATIONS = dict(
         urls = [
             "https://download.java.net/java/GA/jdk18.0.2.1/db379da656dc47308e138f21b33976fa/1/GPL/openjdk-18.0.2.1_linux-x64_bin.tar.gz",
         ],
+        manual_license_name = "oracle/openjdk",
     ),
     io_bazel_rules_closure = dict(
         sha256 = "5b00383d08dd71f28503736db0500b6fb4dda47489ff5fc6bed42557c07c6ba9",
@@ -321,15 +416,14 @@ REPOSITORY_LOCATIONS = dict(
         urls = ["https://github.com/bazelbuild/rules_closure/archive/308b05b2419edb5c8ee0471b67a40403df940149.tar.gz"],
     ),
     io_bazel_rules_docker = dict(
-        sha256 = "07ee8ca536080f5ebab6377fc6e8920e9a761d2ee4e64f0f6d919612f6ab56aa",
-        strip_prefix = "rules_docker-0.25.0",
-        urls = ["https://github.com/bazelbuild/rules_docker/archive/refs/tags/v0.25.0.tar.gz"],
+        sha256 = "b1e80761a8a8243d03ebca8845e9cc1ba6c82ce7c5179ce2b295cd36f7e394bf",
+        urls = ["https://github.com/bazelbuild/rules_docker/releases/download/v0.25.0/rules_docker-v0.25.0.tar.gz"],
     ),
     io_bazel_rules_go = dict(
-        sha256 = "099a9fb96a376ccbbb7d291ed4ecbdfd42f6bc822ab77ae6f1b5cb9e914e94fa",
+        sha256 = "278b7ff5a826f3dc10f04feaf0b70d48b68748ccd512d7f98bf442077f043fe3",
         urls = [
-            "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.35.0/rules_go-v0.35.0.zip",
-            "https://github.com/bazelbuild/rules_go/releases/download/v0.35.0/rules_go-v0.35.0.zip",
+            "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.41.0/rules_go-v0.41.0.zip",
+            "https://github.com/bazelbuild/rules_go/releases/download/v0.41.0/rules_go-v0.41.0.zip",
         ],
     ),
     io_bazel_rules_k8s = dict(
@@ -351,20 +445,26 @@ REPOSITORY_LOCATIONS = dict(
         strip_prefix = "tensorflow-2.11.0",
         urls = ["https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.11.0.tar.gz"],
     ),
+    org_libc_musl = dict(
+        sha256 = "7d5b0b6062521e4627e099e4c9dc8248d32a30285e959b7eecaa780cf8cfd4a4",
+        strip_prefix = "musl-1.2.3",
+        urls = ["http://musl.libc.org/releases/musl-1.2.3.tar.gz"],
+        manual_license_name = "libc/musl",
+    ),
     rules_foreign_cc = dict(
         sha256 = "6041f1374ff32ba711564374ad8e007aef77f71561a7ce784123b9b4b88614fc",
         strip_prefix = "rules_foreign_cc-0.8.0",
         urls = ["https://github.com/bazelbuild/rules_foreign_cc/archive/refs/tags/0.8.0.tar.gz"],
     ),
     rules_python = dict(
-        sha256 = "cdf6b84084aad8f10bf20b46b77cb48d83c319ebe6458a18e9d2cebf57807cdd",
-        strip_prefix = "rules_python-0.8.1",
-        urls = ["https://github.com/bazelbuild/rules_python/archive/refs/tags/0.8.1.tar.gz"],
+        sha256 = "9d04041ac92a0985e344235f5d946f71ac543f1b1565f2cdbc9a2aaee8adf55b",
+        strip_prefix = "rules_python-0.26.0",
+        urls = ["https://github.com/bazelbuild/rules_python/archive/refs/tags/0.26.0.tar.gz"],
     ),
     rules_jvm_external = dict(
-        urls = ["https://github.com/bazelbuild/rules_jvm_external/archive/refs/tags/4.2.tar.gz"],
-        sha256 = "2cd77de091e5376afaf9cc391c15f093ebd0105192373b334f0a855d89092ad5",
-        strip_prefix = "rules_jvm_external-4.2",
+        urls = ["https://github.com/bazelbuild/rules_jvm_external/archive/refs/tags/5.2.tar.gz"],
+        sha256 = "c9ae901381ae7f7eca08aed96caeb542f96c5449052db9c9d27274a8dc154cdf",
+        strip_prefix = "rules_jvm_external-5.2",
     ),
     rules_pkg = dict(
         sha256 = "eea0f59c28a9241156a47d7a8e32db9122f3d50b505fae0f33de6ce4d9b61834",
@@ -386,13 +486,6 @@ REPOSITORY_LOCATIONS = dict(
         urls = [
             "https://storage.googleapis.com/grpc-bazel-mirror/github.com/protocolbuffers/upb/archive/e4635f223e7d36dfbea3b722a4ca4807a7e882e2.tar.gz",
             "https://github.com/protocolbuffers/upb/archive/e4635f223e7d36dfbea3b722a4ca4807a7e882e2.tar.gz",
-        ],
-    ),
-    com_github_util_linux_libuuid = dict(
-        sha256 = "f96f1924d1339cd5f668d380061c93e0b800939b5228dd6d7825593e5237f14c",
-        strip_prefix = "libuuid-0a6d600cab6aaa4a6d6b268e6edaab3addbb0a6b",
-        urls = [
-            "https://github.com/pixie-io/libuuid/archive/0a6d600cab6aaa4a6d6b268e6edaab3addbb0a6b.tar.gz",
         ],
     ),
     cpuinfo = dict(

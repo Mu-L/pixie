@@ -30,12 +30,25 @@ import { Theme } from '@mui/material/styles';
 import { createStyles, makeStyles } from '@mui/styles';
 
 import { GQLUserSettings } from 'app/types/schema';
+import pixieAnalytics from 'app/utils/analytics';
 
 import {
   StyledTableCell, StyledTableHeaderCell,
 } from './utils';
 
 const useStyles = makeStyles((theme: Theme) => createStyles({
+  root: {
+    width: '100%',
+    maxWidth: theme.breakpoints.values.lg,
+    margin: '0 auto',
+  },
+  tableHeadRow: {
+    '& > th': {
+      fontWeight: 'normal',
+      textTransform: 'uppercase',
+      color: theme.palette.foreground.grey4,
+    },
+  },
   error: {
     padding: theme.spacing(1),
   },
@@ -82,10 +95,10 @@ export const UserSettings = React.memo(() => {
   }
 
   return (
-    <>
+    <div className={classes.root}>
       <Table>
         <TableHead>
-          <TableRow>
+          <TableRow className={classes.tableHeadRow}>
             <StyledTableHeaderCell>Setting</StyledTableHeaderCell>
             <StyledTableHeaderCell>Description</StyledTableHeaderCell>
             <StyledTableHeaderCell>Action</StyledTableHeaderCell>
@@ -114,7 +127,12 @@ export const UserSettings = React.memo(() => {
                       },
                     },
                     variables: { analyticsOptout: !userSettings.analyticsOptout },
-                  }).then();
+                  }).then(() => {
+                    // Propagate the opt-in/opt-out preference immediately.
+                    // The act of changing this setting is not tracked.
+                    // Opting in will promptly set analytics up; opting out will instantly stop tracking everything.
+                    pixieAnalytics.reinit();
+                  });
                 }}
                 variant='outlined'
                 color='primary'
@@ -125,7 +143,7 @@ export const UserSettings = React.memo(() => {
           </TableRow>
         </TableBody>
       </Table>
-    </>
+    </div>
   );
 });
 UserSettings.displayName = 'UserSettings';

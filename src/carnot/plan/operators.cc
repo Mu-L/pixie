@@ -28,6 +28,7 @@
 
 #include <absl/strings/str_join.h>
 #include <absl/strings/substitute.h>
+#include <google/protobuf/text_format.h>
 #include <magic_enum.hpp>
 
 #include "src/carnot/plan/scalar_expression.h"
@@ -154,7 +155,7 @@ Status MapOperator::Init(const planpb::MapOperator& pb) {
   for (int i = 0; i < pb_.expressions_size(); ++i) {
     column_names_.emplace_back(pb_.column_names(i));
     auto s = ScalarExpression::FromProto(pb_.expressions(i));
-    PL_RETURN_IF_ERROR(s);
+    PX_RETURN_IF_ERROR(s);
     expressions_.emplace_back(s.ConsumeValueOrDie());
   }
 
@@ -175,7 +176,7 @@ StatusOr<table_store::schema::Relation> MapOperator::OutputRelation(
   table_store::schema::Relation r;
   for (size_t idx = 0; idx < expressions_.size(); ++idx) {
     auto s = expressions_[idx]->OutputDataType(state, schema);
-    PL_RETURN_IF_ERROR(s);
+    PX_RETURN_IF_ERROR(s);
     r.AddColumn(s.ConsumeValueOrDie(), column_names_[idx]);
   }
   return r;
@@ -193,9 +194,12 @@ std::string AggregateOperator::DebugString() const {
   const auto& g = groups();
   std::vector<std::string> group_names(g.size());
   std::transform(begin(g), end(g), begin(group_names), [](auto val) { return val.name; });
-
-  return absl::Substitute("Op:Aggregate(values=($0), groups=($1))",
-                          absl::StrJoin(value_names, ", "), absl::StrJoin(group_names, ", "));
+  std::string out;
+  ::google::protobuf::TextFormat::PrintToString(pb_, &out);
+  return absl::Substitute(
+      "Op:Aggregate(values=($0), groups=($1), partial=($2), finalize=($3)):\n$4",
+      absl::StrJoin(value_names, ", "), absl::StrJoin(group_names, ", "), partial_agg(),
+      finalize_results(), out);
 }
 
 Status AggregateOperator::Init(const planpb::AggregateOperator& pb) {
@@ -210,7 +214,7 @@ Status AggregateOperator::Init(const planpb::AggregateOperator& pb) {
   for (int i = 0; i < pb_.values_size(); ++i) {
     auto ae = std::make_unique<AggregateExpression>();
     auto s = ae->Init(pb_.values(i));
-    PL_RETURN_IF_ERROR(s);
+    PX_RETURN_IF_ERROR(s);
     values_.emplace_back(std::unique_ptr<AggregateExpression>(std::move(ae)));
   }
   groups_.reserve(pb_.groups_size());
@@ -234,7 +238,7 @@ StatusOr<table_store::schema::Relation> AggregateOperator::OutputRelation(
                            input_ids[0]);
   }
 
-  PL_ASSIGN_OR_RETURN(const auto& input_relation, schema.GetRelation(input_ids[0]));
+  PX_ASSIGN_OR_RETURN(const auto& input_relation, schema.GetRelation(input_ids[0]));
   table_store::schema::Relation output_relation;
 
   for (int idx = 0; idx < pb_.groups_size(); ++idx) {
@@ -251,17 +255,13 @@ StatusOr<table_store::schema::Relation> AggregateOperator::OutputRelation(
     output_relation.AddColumn(input_relation.GetColumnType(col_idx), pb_.group_names(idx));
   }
 
-  // If this node is a partial aggregate we output a simple schema where the last column has
-  // serialized aggregates.
-  // TODO(philkuz) need the column name and maybe type from somewhere else.
-  if (pb_.partial_agg() && !pb_.finalize_results()) {
-    output_relation.AddColumn(types::STRING, "serialized_expressions");
-    return output_relation;
-  }
-
   for (const auto& [i, value] : Enumerate(values_)) {
-    PL_ASSIGN_OR_RETURN(auto dt, value->OutputDataType(state, schema));
-    output_relation.AddColumn(dt, pb_.value_names(i));
+    if (pb_.finalize_results()) {
+      PX_ASSIGN_OR_RETURN(auto dt, value->OutputDataType(state, schema));
+      output_relation.AddColumn(dt, pb_.value_names(i));
+    } else {
+      output_relation.AddColumn(types::STRING, pb_.value_names(i));
+    }
   }
   return output_relation;
 }
@@ -352,7 +352,7 @@ std::string FilterOperator::DebugString() const {
 
 Status FilterOperator::Init(const planpb::FilterOperator& pb) {
   pb_ = pb;
-  PL_ASSIGN_OR_RETURN(expression_, ScalarExpression::FromProto(pb_.expression()));
+  PX_ASSIGN_OR_RETURN(expression_, ScalarExpression::FromProto(pb_.expression()));
 
   selected_cols_.reserve(pb_.columns_size());
   for (auto i = 0; i < pb_.columns_size(); ++i) {
@@ -383,7 +383,7 @@ StatusOr<table_store::schema::Relation> FilterOperator::OutputRelation(
     }
   }
 
-  PL_ASSIGN_OR_RETURN(auto input_relation, schema.GetRelation(input_ids[0]));
+  PX_ASSIGN_OR_RETURN(auto input_relation, schema.GetRelation(input_ids[0]));
   table_store::schema::Relation output_relation;
   for (auto selected_col_idx : selected_cols_) {
     CHECK_LT(selected_col_idx, static_cast<int64_t>(input_relation.NumColumns()))
@@ -437,7 +437,7 @@ StatusOr<table_store::schema::Relation> LimitOperator::OutputRelation(
     return error::NotFound("Missing relation ($0) for input of FilterOperator", input_ids[0]);
   }
 
-  PL_ASSIGN_OR_RETURN(const table_store::schema::Relation& input_relation,
+  PX_ASSIGN_OR_RETURN(const table_store::schema::Relation& input_relation,
                       schema.GetRelation(input_ids[0]));
   table_store::schema::Relation output_relation;
   for (auto selected_col_idx : selected_cols_) {
@@ -508,7 +508,7 @@ StatusOr<table_store::schema::Relation> UnionOperator::OutputRelation(
       return error::NotFound("Missing relation ($0) for input of UnionOperator", input_ids[i]);
     }
 
-    PL_ASSIGN_OR_RETURN(const auto& input_relation, schema.GetRelation(input_ids[i]));
+    PX_ASSIGN_OR_RETURN(const auto& input_relation, schema.GetRelation(input_ids[i]));
 
     for (size_t output_index = 0; output_index < column_mapping(i).size(); ++output_index) {
       auto src_index = column_mapping(i).at(output_index);  // Source index of output column j
@@ -626,8 +626,8 @@ StatusOr<table_store::schema::Relation> JoinOperator::OutputRelation(
                            input_ids[1]);
   }
 
-  PL_ASSIGN_OR_RETURN(const auto& left_relation, schema.GetRelation(input_ids[0]));
-  PL_ASSIGN_OR_RETURN(const auto& right_relation, schema.GetRelation(input_ids[1]));
+  PX_ASSIGN_OR_RETURN(const auto& left_relation, schema.GetRelation(input_ids[0]));
+  PX_ASSIGN_OR_RETURN(const auto& right_relation, schema.GetRelation(input_ids[1]));
 
   table_store::schema::Relation r;
   for (int i = 0; i < pb_.column_names_size(); ++i) {
@@ -654,7 +654,7 @@ Status UDTFSourceOperator::Init(const planpb::UDTFSourceOperator& pb) {
 
   for (const auto& sv : pb_.arg_values()) {
     ScalarValue s;
-    PL_RETURN_IF_ERROR(s.Init(sv));
+    PX_RETURN_IF_ERROR(s.Init(sv));
     init_arguments_.emplace_back(s);
   }
   return Status::OK();
@@ -663,7 +663,7 @@ Status UDTFSourceOperator::Init(const planpb::UDTFSourceOperator& pb) {
 StatusOr<table_store::schema::Relation> UDTFSourceOperator::OutputRelation(
     const table_store::schema::Schema& /*schema*/, const PlanState& state,
     const std::vector<int64_t>& /*input_ids*/) const {
-  PL_ASSIGN_OR_RETURN(auto def, state.func_registry()->GetUDTFDefinition(pb_.name()));
+  PX_ASSIGN_OR_RETURN(auto def, state.func_registry()->GetUDTFDefinition(pb_.name()));
   auto cols = def->output_relation();
 
   table_store::schema::Relation output_rel;

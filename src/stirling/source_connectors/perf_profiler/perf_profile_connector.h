@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/common/metrics/metrics.h"
 #include "src/shared/types/types.h"
 #include "src/stirling/bpf_tools/bcc_wrapper.h"
 #include "src/stirling/core/source_connector.h"
@@ -41,11 +42,14 @@
 namespace px {
 namespace stirling {
 
+using bpf_tools::WrappedBCCArrayTable;
+using bpf_tools::WrappedBCCStackTable;
+
 namespace profiler {
 static constexpr std::string_view kNotSymbolizedMessage = "<not symbolized>";
 }  // namespace profiler
 
-class PerfProfileConnector : public SourceConnector, public bpf_tools::BCCWrapper {
+class PerfProfileConnector : public BCCSourceConnector {
  public:
   static constexpr std::string_view kName = "perf_profiler";
   static constexpr auto kTables = MakeArray(kStackTraceTable);
@@ -93,22 +97,30 @@ class PerfProfileConnector : public SourceConnector, public bpf_tools::BCCWrappe
   void ProcessBPFStackTraces(ConnectorContext* ctx, DataTable* data_table);
 
   // Read BPF data structures, build & incorporate records to the table.
-  void CreateRecords(ebpf::BPFStackTable* stack_traces, ConnectorContext* ctx,
+  void CreateRecords(WrappedBCCStackTable* stack_traces, ConnectorContext* ctx,
                      DataTable* data_table);
 
-  StackTraceHisto AggregateStackTraces(ConnectorContext* ctx, ebpf::BPFStackTable* stack_traces);
+  StackTraceHisto AggregateStackTraces(ConnectorContext* ctx, WrappedBCCStackTable* stack_traces);
 
   void CleanupSymbolizers(const absl::flat_hash_set<md::UPID>& deleted_upids);
 
   void PrintStats() const;
+  void CheckProfilerState(const uint64_t num_stack_traces);
 
   // data structures shared with BPF:
-  std::unique_ptr<ebpf::BPFStackTable> stack_traces_a_;
-  std::unique_ptr<ebpf::BPFStackTable> stack_traces_b_;
+  std::unique_ptr<WrappedBCCStackTable> stack_traces_a_;
+  std::unique_ptr<WrappedBCCStackTable> stack_traces_b_;
 
-  std::unique_ptr<ebpf::BPFArrayTable<uint64_t>> profiler_state_;
+  std::unique_ptr<WrappedBCCArrayTable<uint64_t>> profiler_state_;
+  prometheus::Gauge& profiler_state_overflow_gauge_;
+  prometheus::Counter& profiler_transfer_data_counter_;
+  prometheus::Counter& profiler_state_overflow_counter_;
+  prometheus::Counter& profiler_state_map_read_error_counter_;
 
-  // Number of iterations, where each iteration is drains the information collectid in BPF.
+  // Expected number of stack traces sampled per transfer data invocation.
+  int32_t expected_stack_traces_;
+
+  // Number of iterations, where each iteration is drains the information collected in BPF.
   uint64_t transfer_count_ = 0;
 
   // Tracks unique stack trace ids, for the lifetime of Stirling:
@@ -130,9 +142,6 @@ class PerfProfileConnector : public SourceConnector, public bpf_tools::BCCWrappe
 
   // Called by HandleHistoEvent() to add the stack-trace-key to raw_histo_data_.
   void AcceptStackTraceKey(stack_trace_key_t* data);
-
-  ebpf::BPFPerfBuffer* histogram_a_perf_buffer_;
-  ebpf::BPFPerfBuffer* histogram_b_perf_buffer_;
 
   const uint32_t stats_log_interval_;
   utils::StatCounter<StatKey> stats_;

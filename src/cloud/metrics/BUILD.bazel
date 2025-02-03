@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary", "pl_go_image")
 
@@ -35,25 +34,18 @@ pl_go_image(
     ],
 )
 
-container_push(
-    name = "push_metrics_server_image",
-    format = "Docker",
-    image = ":metrics_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/cloud/metrics_server_image",
-    tag = "{STABLE_BUILD_TAG}",
-)
-
 go_library(
     name = "metrics_lib",
     srcs = ["metrics_server.go"],
     importpath = "px.dev/pixie/src/cloud/metrics",
     deps = [
         "//src/cloud/metrics/controllers",
+        "//src/cloud/shared/messages",
         "//src/cloud/shared/vzshard",
         "//src/shared/services",
         "//src/shared/services/env",
         "//src/shared/services/healthz",
+        "//src/shared/services/metrics",
         "//src/shared/services/msgbus",
         "//src/shared/services/server",
         "@com_github_sirupsen_logrus//:logrus",

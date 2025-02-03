@@ -4,9 +4,9 @@
 #
 #    pip-compile --generate-hashes requirements.bazel.txt
 #
-jinja2==3.1.2 \
-    --hash=sha256:31351a702a408a9e7595a8fc6150fc3f43bb6bf7e319770cbc0db9df9437e852 \
-    --hash=sha256:6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61
+jinja2==3.1.4 \
+    --hash=sha256:4a3aee7acbbe7303aede8e9648d13b8bf88a429282aa6122a993f0ac800cb369 \
+    --hash=sha256:bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d
     # via
     #   -r requirements.bazel.txt
     #   pdoc
@@ -55,13 +55,13 @@ markupsafe==2.1.1 \
     #   -r requirements.bazel.txt
     #   jinja2
     #   pdoc
-pdoc==12.3.0 \
-    --hash=sha256:0c520a6af892863b8712abb6abaad2c928366d7dee727715177774623c30405d \
-    --hash=sha256:b245903dd8fb515b99d838bb1ad3efeb706fa0efd925a886c4624bf946afaab5
+pdoc==14.5.1 \
+    --hash=sha256:4ddd9c5123a79f511cedffd7231bf91a6e0bd0968610f768342ec5d00b5eefee \
+    --hash=sha256:fda6365a06e438b43ca72235b58a2e2ecd66445fcc444313f6ebbde4b0abd94b
     # via -r requirements.bazel.txt
-pygments==2.14.0 \
-    --hash=sha256:b3ed06a9e8ac9a9aae5a6f5dbe78a8a58655d17b43b93c078f094ddc476ae297 \
-    --hash=sha256:fa7bd7bd2771287c0de303af8bfdfc731f51bd2c6a47ab69d117138893b82717
+pygments==2.15.0 \
+    --hash=sha256:77a3299119af881904cd5ecd1ac6a66214b6e9bed1f2db16993b54adede64094 \
+    --hash=sha256:f7e36cffc4c517fbc252861b9a6e4644ca0e5abadf9a113c72d1358ad09b9500
     # via
     #   -r requirements.bazel.txt
     #   pdoc

@@ -23,8 +23,8 @@ import { Theme } from '@mui/material/styles';
 import { createStyles, makeStyles } from '@mui/styles';
 
 import { ROW_RETENTION_LIMIT, VizierTable } from 'app/api';
-import { CompleteColumnDef, LiveDataTable } from 'app/containers/live-data-table/live-data-table';
 import { WidgetDisplay } from 'app/containers/live/vis';
+import { CompleteColumnDef, LiveDataTable } from 'app/containers/live-data-table/live-data-table';
 import { ResultsContext, useLatestRowCount } from 'app/context/results-context';
 import { Arguments } from 'app/utils/args-utils';
 
@@ -34,6 +34,11 @@ const useStyles = makeStyles(({ spacing, typography, palette }: Theme) => create
     display: 'flex',
     flexDirection: 'column',
     overflowX: 'hidden',
+    // Bypass the padding of the parent <Paper>, but keep the rounding of the border
+    margin: spacing(-0.75),
+    marginTop: 0,
+    borderBottomLeftRadius: 'inherit',
+    borderBottomRightRadius: 'inherit',
   },
   table: {
     display: 'flex',
@@ -47,11 +52,61 @@ const useStyles = makeStyles(({ spacing, typography, palette }: Theme) => create
     textAlign: 'right',
     ...typography.subtitle2,
   },
+  tableSummaryExtern: { // For when this is sent up to a widget titlebar
+    ...typography.caption,
+    color: palette.foreground.one,
+
+    '& $overload': { color: palette.foreground.three },
+    '& $muted': { color: palette.foreground.three },
+  },
+  externalControls: {
+    display: 'flex',
+    flexFlow: 'row nowrap',
+    gap: spacing(1),
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
   overload: {
     fontStyle: 'italic',
     color: alpha(palette.foreground.one, 0.8),
   },
+  muted: {
+    color: alpha(palette.foreground.one, 0.8),
+  },
 }), { name: 'QueryResultViewer' });
+
+const TableSummary = React.memo<{
+  visibleStart: number, visibleStop: number, numRows: number, isOverload: boolean,
+}>(({
+  visibleStart, visibleStop, numRows, isOverload,
+}) => {
+  const classes = useStyles();
+
+  const overloadWarning = isOverload
+    ? <span className={classes.overload}>{' (keeping only latest to reduce memory pressure)'}</span>
+    : '';
+
+  const count = visibleStop - visibleStart + 1;
+
+  if (count <= 0) {
+    return <span>No records to show</span>;
+  } else if (count >= numRows) {
+    return <>
+      <span>Showing {count} records</span>
+      {overloadWarning}
+    </>;
+  } else {
+    return (
+      <span>
+        Showing {visibleStart + 1} - {visibleStop + 1}
+        <span className={classes.muted}>{' out of '}</span>
+        {numRows} records
+        {overloadWarning}
+      </span>
+    );
+  }
+});
+TableSummary.displayName = 'TableSummary';
 
 export interface QueryResultTableDisplay extends WidgetDisplay {
   gutterColumn?: string,
@@ -62,53 +117,85 @@ export interface QueryResultTableProps {
   table: VizierTable;
   propagatedArgs: Arguments;
   customGutters?: Array<CompleteColumnDef>;
+  /** If set, controls including the table summary will be rendered to this ref instead of underneath the table */
+  setExternalControls?: React.RefCallback<React.ReactNode>;
 }
 
 export const QueryResultTable = React.memo<QueryResultTableProps>(({
-  display, table, propagatedArgs, customGutters = [],
+  display, table, propagatedArgs, customGutters, setExternalControls,
 }) => {
   const classes = useStyles();
   const { streaming } = React.useContext(ResultsContext);
 
   // Ensures the summary updates while streaming queries.
   const numRows = useLatestRowCount(table.name);
-  const showOverloadWarning = streaming && numRows >= ROW_RETENTION_LIMIT;
+  const isOverload = streaming && numRows >= ROW_RETENTION_LIMIT;
 
   const [visibleStart, setVisibleStart] = React.useState(1);
   const [visibleStop, setVisibleStop] = React.useState(1);
-  const visibleRowSummary = React.useMemo(() => {
-    const count = visibleStop - visibleStart + 1;
-    let text = `Showing ${visibleStart + 1} - ${visibleStop + 1} / ${numRows} records`;
-    if (count <= 0) {
-      text = 'No records to show';
-    } else if (count >= numRows) {
-      text = '\xa0'; // non-breaking space
-    }
-    return text;
-  }, [numRows, visibleStart, visibleStop]);
 
   const onRowsRendered = React.useCallback(({ visibleStartIndex, visibleStopIndex }) => {
     setVisibleStart(visibleStartIndex);
     setVisibleStop(visibleStopIndex);
   }, []);
 
-  return (
+  const [globalControls, setGlobalControls] = React.useState<React.ReactNode>(null);
+  const globalControlsRef = React.useCallback((el: React.ReactNode) => { setGlobalControls(el); }, []);
+
+  React.useEffect(() => {
+    if (setExternalControls) {
+      setExternalControls(
+        <div className={classes.externalControls}>
+          <div className={classes.tableSummaryExtern}>
+            <TableSummary
+              visibleStart={visibleStart}
+              visibleStop={visibleStop}
+              numRows={numRows}
+              isOverload={isOverload}
+            />
+          </div>
+          {globalControls}
+        </div>,
+      );
+    }
+  }, [
+    setExternalControls, isOverload, numRows, visibleStart, visibleStop, globalControls,
+    classes.tableSummaryExtern, classes.externalControls,
+  ]);
+
+  // To reduce how many components update when scrolling
+  const defaultSummary = React.useMemo(() => {
+    if (setExternalControls) return null;
+    return (
+      <div className={classes.tableSummary}>
+        <TableSummary
+          visibleStart={visibleStart}
+          visibleStop={visibleStop}
+          numRows={numRows}
+          isOverload={isOverload}
+        />
+      </div>
+    );
+  }, [setExternalControls, classes.tableSummary, visibleStart, visibleStop, numRows, isOverload]);
+
+  // This gets memoized too, since scrolling should _only_ be updating the innermost <List /> and the summary.
+  // Without this, the entire context stack in between the two wastes as much as 8ms per scroll event changing nothing.
+  return React.useMemo(() => (
     <div className={classes.root}>
       <div className={classes.table}>
         <LiveDataTable
           table={table}
-          gutterColumns={[display.gutterColumn, ...customGutters].filter(g => g)}
+          gutterColumns={[display.gutterColumn, ...(customGutters ?? [])].filter(g => g)}
           propagatedArgs={propagatedArgs}
           onRowsRendered={onRowsRendered}
+          setExternalControls={setExternalControls ? globalControlsRef : null}
         />
       </div>
-      <div className={classes.tableSummary}>
-        <span>{visibleRowSummary}</span>
-        {showOverloadWarning && (
-          <span className={classes.overload}>{' (keeping only latest to reduce memory pressure)'}</span>
-        )}
-      </div>
+      {defaultSummary}
     </div>
-  );
+  ), [
+    classes.root, classes.table, defaultSummary, customGutters, display.gutterColumn, globalControlsRef,
+    onRowsRendered, propagatedArgs, setExternalControls, table,
+  ]);
 });
 QueryResultTable.displayName = 'QueryResultTable';

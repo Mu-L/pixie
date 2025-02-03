@@ -23,6 +23,8 @@ import { Theme } from '@mui/material/styles';
 import { createStyles, makeStyles } from '@mui/styles';
 
 import { AuthBox, SignupMarcom } from 'app/components';
+import pixieAnalytics from 'app/utils/analytics';
+import { signupMessage } from 'configurable/signup';
 
 import { BasePage } from './base';
 import { GetOAuthProvider } from './utils';
@@ -43,6 +45,10 @@ const useStyles = makeStyles(({ breakpoints }: Theme) => createStyles({
 }), { name: 'SignupPage' });
 
 export const SignupPage = React.memo(() => {
+  React.useEffect(() => {
+    pixieAnalytics.track('Signup page viewed');
+  }, []);
+
   const classes = useStyles();
   const authClient = React.useMemo(() => GetOAuthProvider(), []);
   const buttons = React.useMemo(
@@ -58,9 +64,7 @@ export const SignupPage = React.memo(() => {
           <AuthBox
             toggleURL={`/auth/login${window.location.search}`}
             title='Get Started'
-            // Need to encapsulate so that newline is properly escaped.
-            body={`Pixie Community is Free Forever.
-          No Credit Card Needed.`}
+            body={signupMessage}
             buttonCaption='Already have an account?'
             buttonText='Login'
             showTOSDisclaimer

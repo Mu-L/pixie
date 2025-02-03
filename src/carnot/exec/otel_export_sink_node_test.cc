@@ -146,6 +146,69 @@ metrics {
   EXPECT_EQ(url_, "otlp.px.dev");
 }
 
+TEST_F(OTelExportSinkNodeTest, non_utf_8) {
+  std::string operator_pb_txt = R"(
+endpoint_config {
+  url: "otlp.px.dev"
+    headers {
+      key: "api_key"
+      value: "abcd"
+    }
+}
+metrics {
+  name: "http.resp.latency"
+  time_column_index: 0
+  gauge { int_column_index: 1 }
+  attributes {
+    name: "test"
+    column {
+      column_type: STRING
+      column_index: 2
+    }
+  }
+})";
+  planpb::OTelExportSinkOperator otel_sink_op;
+
+  EXPECT_TRUE(google::protobuf::TextFormat::ParseFromString(operator_pb_txt, &otel_sink_op));
+  auto plan_node = std::make_unique<plan::OTelExportSinkOperator>(1);
+  auto s = plan_node->Init(otel_sink_op);
+  RowDescriptor input_rd({types::TIME64NS, types::FLOAT64, types::STRING});
+  RowDescriptor output_rd({});
+
+  std::shared_ptr<const grpc::AuthContext> auth_context;
+
+  std::vector<otelmetricscollector::ExportMetricsServiceRequest> actual_protos(1);
+  size_t i = 0;
+  EXPECT_CALL(*metrics_mock_, Export(_, _, _))
+      .Times(1)
+      .WillRepeatedly(Invoke(
+          [&i, &actual_protos, &auth_context](const auto& ctx, const auto& proto, const auto&) {
+            auth_context = ctx->auth_context();
+            actual_protos[i] = proto;
+            ++i;
+            return grpc::Status::OK;
+          }));
+
+  auto tester = exec::ExecNodeTester<OTelExportSinkNode, plan::OTelExportSinkOperator>(
+      *plan_node, output_rd, {input_rd}, exec_state_.get());
+  std::string non_utf_8_bytes(1, 0xC0);
+  auto rb1 = RowBatchBuilder(input_rd, 1, /*eow*/ false, /*eos*/ false)
+                 .AddColumn<types::Time64NSValue>({10})
+                 .AddColumn<types::Float64Value>({1.0})
+                 .AddColumn<types::StringValue>({non_utf_8_bytes})
+                 .get();
+  tester.ConsumeNext(rb1, 1, 0);
+  EXPECT_EQ(non_utf_8_bytes, actual_protos[0]
+                                 .resource_metrics(0)
+                                 .scope_metrics(0)
+                                 .metrics(0)
+                                 .gauge()
+                                 .data_points(0)
+                                 .attributes(0)
+                                 .value()
+                                 .bytes_value());
+}
+
 struct TestCase {
   std::string name;
   std::string operator_proto;
@@ -237,7 +300,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       summary {
@@ -266,7 +329,7 @@ resource_metrics {
 }
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       summary {
@@ -335,7 +398,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -362,7 +425,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -397,7 +460,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -411,7 +474,7 @@ resource_metrics {
 }
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -440,7 +503,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -454,7 +517,7 @@ resource_metrics {
 }
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -484,7 +547,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       description: "tracks the response latency of http requests"
@@ -518,7 +581,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -533,7 +596,7 @@ resource_metrics {
                                R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -569,7 +632,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       summary {
@@ -607,7 +670,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "metric1"
       gauge {
@@ -677,7 +740,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -704,7 +767,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -731,7 +794,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -758,7 +821,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -818,7 +881,7 @@ eos: true)pb"},
                               {R"pb(
 resource_metrics {
   resource {}
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -887,7 +950,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -914,7 +977,7 @@ resource_metrics {
       }
     }
   }
-  instrumentation_library_metrics {
+  scope_metrics {
     metrics {
       name: "http.resp.latency"
       gauge {
@@ -978,6 +1041,7 @@ TEST_P(OTelSpanTest, process_data) {
     EXPECT_THAT(actual_protos[i], EqualsProto(tc.expected_otel_protos[i]));
   }
 }
+
 INSTANTIATE_TEST_SUITE_P(OTelSpan, OTelSpanTest,
                          ::testing::ValuesIn(std::vector<TestCase>{
                              {"name_as_a_string",
@@ -1028,7 +1092,7 @@ resource_spans {
       }
     }
   }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1071,7 +1135,7 @@ eos: true)pb"},
                               {R"pb(
 resource_spans {
   resource { }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1109,7 +1173,7 @@ eos: true)pb"},
                               {R"pb(
 resource_spans {
   resource {}
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span1"
       start_time_unix_nano: 10
@@ -1124,7 +1188,7 @@ resource_spans {
 }
 resource_spans {
   resource {}
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span2"
       start_time_unix_nano: 20
@@ -1193,7 +1257,7 @@ resource_spans {
       }
     }
   }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1220,7 +1284,7 @@ resource_spans {
       }
     }
   }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1247,7 +1311,7 @@ resource_spans {
       }
     }
   }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1274,7 +1338,7 @@ resource_spans {
       }
     }
   }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1301,7 +1365,7 @@ resource_spans {
       }
     }
   }
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 20
@@ -1368,7 +1432,7 @@ eos: true)pb"},
                               {R"pb(
 resource_spans {
   resource {}
-  instrumentation_library_spans {
+  scope_spans {
     spans {
       name: "span"
       start_time_unix_nano: 10
@@ -1466,7 +1530,7 @@ TEST_P(SpanIDTests, generate_ids) {
   tester.ConsumeNext(*rb.get(), 1, 0);
 
   for (const auto& [s_idx, span] : Enumerate(actual_proto.resource_spans())) {
-    for (const auto& ilm : span.instrumentation_library_spans()) {
+    for (const auto& ilm : span.scope_spans()) {
       for (const auto& span : ilm.spans()) {
         SCOPED_TRACE(absl::Substitute("span $0", s_idx));
         {
@@ -1666,6 +1730,111 @@ eos: true)pb";
   auto retval = tester.node()->ConsumeNext(exec_state_.get(), *rb.get(), 1);
   EXPECT_NOT_OK(retval);
   EXPECT_THAT(retval.ToString(), ::testing::MatchesRegex(".*INTERNAL.*"));
+}
+
+TEST_F(OTelExportSinkNodeTest, consume_spans_clears_span_responses) {
+  oteltracecollector::ExportTraceServiceResponse error_response;
+  error_response.mutable_partial_success()->set_rejected_spans(1);
+  EXPECT_CALL(*trace_mock_, Export(_, _, _))
+      .Times(::testing::AtLeast(2))
+      .WillOnce(DoAll(SetArgPointee<2>(error_response), Return(grpc::Status::OK)))
+      .WillRepeatedly(Invoke([&](const auto&, const auto&, auto* response) {
+        // It's expected that the response argument provided to Export
+        // has .Clear() called on it. This CALL assertion verifies that the
+        // response object no longer has rejected data points since it should
+        // have been .Clear()'ed at the beginning of the second ConsumeTraces invocation
+        EXPECT_EQ(response->partial_success().rejected_spans(), 0);
+        return grpc::Status::OK;
+      }));
+
+  planpb::OTelExportSinkOperator otel_sink_op;
+
+  std::string operator_proto = R"pb(
+spans {
+  name_string: "span"
+  start_time_column_index: 0
+  end_time_column_index: 1
+  trace_id_column_index: -1
+  span_id_column_index: -1
+  parent_span_id_column_index: -1
+})pb";
+  EXPECT_TRUE(google::protobuf::TextFormat::ParseFromString(operator_proto, &otel_sink_op));
+  auto plan_node = std::make_unique<plan::OTelExportSinkOperator>(1);
+  auto s = plan_node->Init(otel_sink_op);
+  std::string row_batch = R"pb(
+cols { time64ns_data { data: 10 data: 20 } }
+cols { time64ns_data { data: 12 data: 22 } }
+num_rows: 2
+eow: true
+eos: true)pb";
+
+  // Load a RowBatch to get the Input RowDescriptor.
+  table_store::schemapb::RowBatchData row_batch_proto;
+  EXPECT_TRUE(google::protobuf::TextFormat::ParseFromString(row_batch, &row_batch_proto));
+  RowDescriptor input_rd = RowBatch::FromProto(row_batch_proto).ConsumeValueOrDie()->desc();
+  RowDescriptor output_rd({});
+
+  auto tester = exec::ExecNodeTester<OTelExportSinkNode, plan::OTelExportSinkOperator>(
+      *plan_node, output_rd, {input_rd}, exec_state_.get());
+  auto rb = RowBatch::FromProto(row_batch_proto).ConsumeValueOrDie();
+
+  // Call ConsumeSpans twice in order to verify that the second
+  // invocation calls clear on the response object.
+  auto retval = tester.node()->ConsumeNext(exec_state_.get(), *rb.get(), 1);
+  EXPECT_OK(retval);
+  retval = tester.node()->ConsumeNext(exec_state_.get(), *rb.get(), 1);
+  EXPECT_OK(retval);
+}
+
+TEST_F(OTelExportSinkNodeTest, metrics_response_is_cleared) {
+  otelmetricscollector::ExportMetricsServiceResponse error_response;
+  error_response.mutable_partial_success()->set_rejected_data_points(1);
+  EXPECT_CALL(*metrics_mock_, Export(_, _, _))
+      .Times(::testing::AtLeast(2))
+      .WillOnce(DoAll(SetArgPointee<2>(error_response), Return(grpc::Status::OK)))
+      .WillRepeatedly(Invoke([&](const auto&, const auto&, auto* response) {
+        // It's expected that the response argument provided to Export
+        // has .Clear() called on it. This CALL assertion verifies that the
+        // response object no longer has rejected data points since it should
+        // have been .Clear()'ed at the beginning of the second ConsumeMetrics invocation
+        EXPECT_EQ(response->partial_success().rejected_data_points(), 0);
+        return grpc::Status::OK;
+      }));
+
+  planpb::OTelExportSinkOperator otel_sink_op;
+
+  std::string operator_proto = R"pb(
+metrics {
+  name: "http.resp.latency"
+  time_column_index: 0
+  gauge { int_column_index: 1 }
+})pb";
+  EXPECT_TRUE(google::protobuf::TextFormat::ParseFromString(operator_proto, &otel_sink_op));
+  auto plan_node = std::make_unique<plan::OTelExportSinkOperator>(1);
+  auto s = plan_node->Init(otel_sink_op);
+  std::string row_batch = R"pb(
+cols { time64ns_data { data: 10 data: 11 } }
+cols { int64_data { data: 15 data: 150 } }
+num_rows: 2
+eow: true
+eos: true)pb";
+
+  // Load a RowBatch to get the Input RowDescriptor.
+  table_store::schemapb::RowBatchData row_batch_proto;
+  EXPECT_TRUE(google::protobuf::TextFormat::ParseFromString(row_batch, &row_batch_proto));
+  RowDescriptor input_rd = RowBatch::FromProto(row_batch_proto).ConsumeValueOrDie()->desc();
+  RowDescriptor output_rd({});
+
+  auto tester = exec::ExecNodeTester<OTelExportSinkNode, plan::OTelExportSinkOperator>(
+      *plan_node, output_rd, {input_rd}, exec_state_.get());
+  auto rb = RowBatch::FromProto(row_batch_proto).ConsumeValueOrDie();
+
+  // Call ConsumeMetrics twice in order to verify that the second
+  // invocation calls clear on the response object.
+  auto retval = tester.node()->ConsumeNext(exec_state_.get(), *rb.get(), 1);
+  EXPECT_OK(retval);
+  retval = tester.node()->ConsumeNext(exec_state_.get(), *rb.get(), 1);
+  EXPECT_OK(retval);
 }
 
 }  // namespace exec

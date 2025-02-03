@@ -103,6 +103,16 @@ relation_map {
       column_semantic_type: ST_UPID
     }
     columns {
+      column_name: "local_addr"
+      column_type: STRING
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "local_port"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+    columns {
       column_name: "remote_addr"
       column_type: STRING
       column_semantic_type: ST_NONE
@@ -169,6 +179,46 @@ relation_map {
     }
     columns {
       column_name: "resp_latency_ns"
+      column_type: INT64
+      column_semantic_type: ST_DURATION_NS
+    }
+  }
+}
+relation_map {
+  key: "cql_events"
+  value {
+    columns {
+      column_name: "time_"
+      column_type: TIME64NS
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "upid"
+      column_type: UINT128
+      column_semantic_type: ST_UPID
+    }
+    columns {
+      column_name: "remote_addr"
+      column_type: STRING
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "remote_port"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "trace_role"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "major_version"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "latency"
       column_type: INT64
       column_semantic_type: ST_DURATION_NS
     }
@@ -968,6 +1018,53 @@ schema_info {
   }
 }
 schema_info {
+  name: "cql_events"
+  relation {
+    columns {
+      column_name: "time_"
+      column_type: TIME64NS
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "upid"
+      column_type: UINT128
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "remote_addr"
+      column_type: STRING
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "remote_port"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "trace_role"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "latency"
+      column_type: INT64
+      column_semantic_type: ST_NONE
+    }
+  }
+  agent_list {
+    high_bits: 0x0000000100000000
+    low_bits: 0x0000000000000001
+  }
+  agent_list {
+    high_bits: 0x0000000100000000
+    low_bits: 0x0000000000000002
+  }
+  agent_list {
+    high_bits: 0x0000000100000000
+    low_bits: 0x0000000000000003
+  }
+}
+schema_info {
   name: "http_events"
   relation {
     columns {
@@ -978,6 +1075,11 @@ schema_info {
     columns {
       column_name: "upid"
       column_type: UINT128
+      column_semantic_type: ST_NONE
+    }
+    columns {
+      column_name: "local_addr"
+      column_type: STRING
       column_semantic_type: ST_NONE
     }
   }
@@ -2117,7 +2219,7 @@ std::unique_ptr<RelationMap> MakeRelationMap(const px::table_store::schemapb::Sc
   auto rel_map = std::make_unique<px::carnot::planner::RelationMap>();
   for (auto& relation_pair : schema_pb.relation_map()) {
     px::table_store::schema::Relation rel;
-    PL_CHECK_OK(rel.FromProto(&relation_pair.second));
+    PX_CHECK_OK(rel.FromProto(&relation_pair.second));
     rel_map->emplace(relation_pair.first, rel);
   }
 
@@ -2197,8 +2299,8 @@ class DistributedRulesTest : public OperatorTests {
         AgentMetadataFilter::Create(100, 0.01, {MetadataType::POD_ID, MetadataType::SERVICE_ID})
             .ConsumeValueOrDie();
 
-    PL_CHECK_OK(agent1_filter->InsertEntity(MetadataType::POD_ID, "agent1_pod"));
-    PL_CHECK_OK(agent2_filter->InsertEntity(MetadataType::SERVICE_ID, "agent2_service"));
+    PX_CHECK_OK(agent1_filter->InsertEntity(MetadataType::POD_ID, "agent1_pod"));
+    PX_CHECK_OK(agent2_filter->InsertEntity(MetadataType::SERVICE_ID, "agent2_service"));
 
     absl::flat_hash_map<std::string, distributedpb::MetadataInfo> mds;
     mds["pem1"] = agent1_filter->ToProto();

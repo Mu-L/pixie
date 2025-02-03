@@ -14,38 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_docker//container:image.bzl", "container_image")
 load("@io_bazel_rules_docker//container:layer.bzl", "container_layer")
 
 package(default_visibility = ["//src/cloud:__subpackages__"])
 
 container_layer(
-    name = "conf",
-    directory = "/usr/local/openresty/nginx/conf",
-    files = [
-        "headers_common.conf",
-        "nginx.conf",
-        "pixie_api.conf",
-        "pixie_cache.conf",
-        "pixie_compression.conf",
-        "pixie_filter.conf",
-        "pixie_health_check.conf",
-        "pixie_server_defaults.conf",
-        "pixie_vars.conf",
-    ],
-)
-
-container_layer(
-    name = "conf_private",
-    directory = "/usr/local/openresty/nginx/conf/private",
-    files = glob(["private/*.conf"]),
-)
-
-container_layer(
     name = "ui_assets",
     directory = "/assets",
-    tars = ["//src/ui:ui-bundle"],
+    tars = ["//src/ui:ui_bundle"],
 )
 
 container_layer(
@@ -65,13 +42,10 @@ container_layer(
 )
 
 container_image(
-    name = "proxy_prod_server_image",
+    name = "proxy_server_image",
     base = "@openresty//image",
-    cmd = ["/scripts/entrypoint.sh"],
-    entrypoint = ["/bin/bash"],
+    entrypoint = ["/scripts/entrypoint.sh"],
     layers = [
-        ":conf",
-        ":conf_private",
         ":ui_assets",
         ":installer",
         ":entrypoint",
@@ -80,28 +54,4 @@ container_image(
         "//k8s:__subpackages__",
         "//src/cloud:__subpackages__",
     ],
-)
-
-container_image(
-    name = "proxy_dev_server_image",
-    base = "@openresty//image",
-    cmd = ["/scripts/entrypoint.sh"],
-    entrypoint = ["/bin/bash"],
-    layers = [
-        ":conf",
-        ":entrypoint",
-    ],
-    visibility = [
-        "//k8s:__subpackages__",
-        "//src/cloud:__subpackages__",
-    ],
-)
-
-container_push(
-    name = "push_proxy_dev_server_image",
-    format = "Docker",
-    image = ":proxy_dev_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/cloud/proxy_dev_image",
-    tag = "{STABLE_BUILD_TAG}",
 )

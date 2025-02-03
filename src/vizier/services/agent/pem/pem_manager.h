@@ -26,9 +26,12 @@
 
 #include <prometheus/gauge.h>
 
+#include "src/common/system/kernel_version.h"
 #include "src/stirling/stirling.h"
-#include "src/vizier/services/agent/manager/manager.h"
 #include "src/vizier/services/agent/pem/tracepoint_manager.h"
+#include "src/vizier/services/agent/shared/manager/manager.h"
+
+DECLARE_uint32(stirling_profiler_stack_trace_sample_period_ms);
 
 namespace px {
 namespace vizier {
@@ -41,7 +44,7 @@ class PEMManager : public Manager {
   template <typename... Args>
   static StatusOr<std::unique_ptr<Manager>> Create(Args&&... args) {
     auto m = std::unique_ptr<PEMManager>(new PEMManager(std::forward<Args>(args)...));
-    PL_RETURN_IF_ERROR(m->Init());
+    PX_RETURN_IF_ERROR(m->Init());
     return std::unique_ptr<Manager>(std::move(m));
   }
 
@@ -50,15 +53,18 @@ class PEMManager : public Manager {
  protected:
   PEMManager() = delete;
   PEMManager(sole::uuid agent_id, std::string_view pod_name, std::string_view host_ip,
-             std::string_view nats_url)
+             std::string_view nats_url, px::system::KernelInfo kernel_info)
       : PEMManager(agent_id, pod_name, host_ip, nats_url,
-                   px::stirling::Stirling::Create(px::stirling::CreateSourceRegistryFromFlag())) {}
+                   px::stirling::Stirling::Create(px::stirling::CreateSourceRegistryFromFlag()),
+                   kernel_info) {}
 
+  // Constructor which creates the HostInfo for an agent (runs once per node).
   PEMManager(sole::uuid agent_id, std::string_view pod_name, std::string_view host_ip,
-             std::string_view nats_url, std::unique_ptr<stirling::Stirling> stirling)
+             std::string_view nats_url, std::unique_ptr<stirling::Stirling> stirling,
+             px::system::KernelInfo kernel_info)
       : Manager(agent_id, pod_name, host_ip, /*grpc_server_port*/ 0, PEMManager::Capabilities(),
-                nats_url,
-                /*mds_url*/ ""),
+                PEMManager::Parameters(), nats_url,
+                /*mds_url*/ "", kernel_info),
         stirling_(std::move(stirling)),
         node_available_memory_(prometheus::BuildGauge()
                                    .Name("node_available_memory")
@@ -87,6 +93,13 @@ class PEMManager : public Manager {
     services::shared::agent::AgentCapabilities capabilities;
     capabilities.set_collects_data(true);
     return capabilities;
+  }
+
+  static services::shared::agent::AgentParameters Parameters() {
+    services::shared::agent::AgentParameters parameters;
+    parameters.set_profiler_stack_trace_sample_period_ms(
+        FLAGS_stirling_profiler_stack_trace_sample_period_ms);
+    return parameters;
   }
 
   std::unique_ptr<stirling::Stirling> stirling_;

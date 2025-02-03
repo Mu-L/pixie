@@ -33,6 +33,8 @@ import { isPixieEmbedded } from 'app/common/embed-context';
 import { VizierErrorDetails } from 'app/common/errors';
 import { buildClass, Spinner } from 'app/components';
 import { LiveRouteContext } from 'app/containers/App/live-routing';
+import { StatChart, StatChartDisplay } from 'app/containers/live-widgets/charts/stat-chart';
+import { TextChart, TextChartDisplay } from 'app/containers/live-widgets/charts/text-chart';
 import {
   TimeSeriesContext, withTimeSeriesContext,
 } from 'app/containers/live-widgets/context/time-series-context';
@@ -55,6 +57,7 @@ import MutationModal from './mutation-modal';
 import {
   DISPLAY_TYPE_KEY, GRAPH_DISPLAY_TYPE, REQUEST_GRAPH_DISPLAY_TYPE,
   TABLE_DISPLAY_TYPE, Vis, widgetTableName, WidgetDisplay as VisWidgetDisplay,
+  STAT_CHART_DISPLAY_TYPE, TEXT_CHART_DISPLAY_TYPE,
 } from './vis';
 
 const useStyles = makeStyles((theme: Theme) => createStyles({
@@ -94,12 +97,32 @@ const useStyles = makeStyles((theme: Theme) => createStyles({
       },
     },
   },
+  widgetTitlebar: {
+    backgroundColor: theme.palette.background.four,
+    color: theme.palette.text.primary,
+    height: theme.spacing(6),
+    padding: theme.spacing(1.5),
+    margin: theme.spacing(-0.75),
+    marginBottom: 0,
+    borderTopLeftRadius: 'inherit',
+    borderTopRightRadius: 'inherit',
+    borderBottom: `1px ${theme.palette.background.two} solid`,
+    display: 'flex',
+    flexFlow: 'row nowrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   widgetTitle: {
-    ...theme.typography.h3,
-    padding: theme.spacing(0.5),
-    color: theme.palette.foreground.two,
+    flex: '0 0 auto',
+    fontSize: theme.spacing(2),
+    fontWeight: 500,
     textTransform: 'capitalize',
-    marginBottom: theme.spacing(1.8),
+  },
+  widgetInfix: {
+    flex: '1 1 auto',
+  },
+  widgetAffix: {
+    flex: '0 0 auto',
   },
   chart: {
     flex: 1,
@@ -125,12 +148,20 @@ const useStyles = makeStyles((theme: Theme) => createStyles({
     height: '100%',
   },
   vegaWidget: {
+    // Bust out of the extra padding from the <Paper/> container
+    width: `calc(100% + ${theme.spacing(1.5)})`,
+    margin: theme.spacing(-0.75),
+    marginTop: 0,
+    borderBottomLeftRadius: 'inherit',
+    borderBottomRightRadius: 'inherit',
+
     flex: 1,
     display: 'flex',
     border: '1px solid transparent',
     '&.focus': {
       border: `1px solid ${theme.palette.foreground.grey2}`,
     },
+    minHeight: 0,
   },
 }), { name: 'Canvas' });
 
@@ -171,6 +202,21 @@ const VegaWidget: React.FC<VegaWidgetProps> = React.memo(({
 });
 VegaWidget.displayName = 'VegaWidget';
 
+const WidgetTitlebar = React.memo<{
+  title: string,
+  affix?: React.ReactNode,
+}>(({ title, affix }) => {
+  const classes = useStyles();
+  return (
+    <div className={classes.widgetTitlebar}>
+      <div className={classes.widgetTitle}>{title}</div>
+      <div className={classes.widgetInfix}>{' '}</div>
+      <div className={classes.widgetAffix}>{affix}</div>
+    </div>
+  );
+});
+WidgetTitlebar.displayName = 'WidgetTitlebar';
+
 const WidgetDisplay: React.FC<{
   display: VisWidgetDisplay,
   table: VizierTable,
@@ -182,6 +228,25 @@ const WidgetDisplay: React.FC<{
   display, table, tableName, widgetName, propagatedArgs, emptyTableMsg,
 }) => {
   const classes = useStyles();
+  const [affix, setAffix] = React.useState<React.ReactNode>(null);
+  const affixRef = React.useCallback((el: React.ReactNode) => { setAffix(el); }, []);
+
+  // Needs to be memoized to avoid making graphs re-render every single frame
+  const parsedTable = React.useMemo(
+    () => table ? dataFromProto(table.relation, table.batches) : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [table?.relation, table?.batches],
+  );
+
+  // Before we do any other processing, check if we have the chart that exist entirely in the vis spec with no data
+  if (display[DISPLAY_TYPE_KEY] === TEXT_CHART_DISPLAY_TYPE) {
+    return (
+      <>
+        <WidgetTitlebar title={widgetName} />
+        <TextChart display={display as TextChartDisplay} />
+      </>
+    );
+  }
 
   if (!table) {
     const msg = emptyTableMsg || `"${tableName}" not found`;
@@ -195,27 +260,27 @@ const WidgetDisplay: React.FC<{
   if (display[DISPLAY_TYPE_KEY] === TABLE_DISPLAY_TYPE) {
     return (
       <>
-        <div className={classes.widgetTitle}>{widgetName}</div>
+        <WidgetTitlebar title={widgetName} affix={affix} />
         <QueryResultTable
           display={display as QueryResultTableDisplay}
           table={table}
           propagatedArgs={propagatedArgs}
+          setExternalControls={affixRef}
         />
       </>
     );
   }
 
-  const parsedTable = dataFromProto(table.relation, table.batches);
-
   if (display[DISPLAY_TYPE_KEY] === GRAPH_DISPLAY_TYPE) {
     return (
       <div className={classes.graphContainer}>
-        <div className={classes.widgetTitle}>{widgetName}</div>
+        <WidgetTitlebar title={widgetName} affix={affix} />
         <GraphWidget
           display={display as GraphDisplay}
           data={parsedTable}
           relation={table.relation}
           propagatedArgs={propagatedArgs}
+          setExternalControls={affixRef}
         />
       </div>
     );
@@ -224,21 +289,34 @@ const WidgetDisplay: React.FC<{
   if (display[DISPLAY_TYPE_KEY] === REQUEST_GRAPH_DISPLAY_TYPE) {
     return (
       <>
-        <div className={classes.widgetTitle}>{widgetName}</div>
+        <WidgetTitlebar title={widgetName} affix={affix} />
         <RequestGraphWidget
           display={display as RequestGraphDisplay}
           data={parsedTable}
           relation={table.relation}
           propagatedArgs={propagatedArgs}
+          setExternalControls={affixRef}
         />
       </>
+    );
+  }
+
+  if (display[DISPLAY_TYPE_KEY] === STAT_CHART_DISPLAY_TYPE) {
+    // This one does not get a titlebar, as it puts its title with the text (stylistic choice)
+    return (
+      <StatChart
+        title={widgetName}
+        display={display as StatChartDisplay}
+        table={table}
+        data={parsedTable}
+      />
     );
   }
 
   try {
     return (
       <>
-        <div className={classes.widgetTitle}>{widgetName}</div>
+        <WidgetTitlebar title={widgetName} />
         <React.Suspense fallback={<div className={classes.spinner}><Spinner /></div>}>
           <VegaWidget
             tableName={tableName}
@@ -391,6 +469,9 @@ const Canvas: React.FC<CanvasProps> = React.memo(({ editable, parentRef }) => {
     return '';
   }, [script?.code]);
 
+  const [affix, setAffix] = React.useState<React.ReactNode>(null);
+  const affixRef = React.useCallback((el: React.ReactNode) => { setAffix(el); }, []);
+
   const charts = React.useMemo(() => {
     const widgets = [];
     script.vis?.widgets.filter((currentWidget) => {
@@ -459,8 +540,13 @@ const Canvas: React.FC<CanvasProps> = React.memo(({ editable, parentRef }) => {
         {
           Array.from(tables.entries()).map(([tableName, table]) => (
             <Paper elevation={1} key={tableName} className={className}>
-              <div className={classes.widgetTitle}>{tableName}</div>
-              <QueryResultTable display={{} as QueryResultTableDisplay} table={table} propagatedArgs={propagatedArgs} />
+              <WidgetTitlebar title={tableName} affix={affix} />
+              <QueryResultTable
+                display={{} as QueryResultTableDisplay}
+                table={table}
+                propagatedArgs={propagatedArgs}
+                setExternalControls={affixRef}
+              />
             </Paper>
           ))
         }

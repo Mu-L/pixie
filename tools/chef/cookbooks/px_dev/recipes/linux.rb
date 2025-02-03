@@ -14,6 +14,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+if ! platform_family?('debian')
+  return
+end
+
 apt_update 'update'
 
 apt_pkg_list = [
@@ -21,13 +25,14 @@ apt_pkg_list = [
   'bash-completion',
   'bc',
   'build-essential',
+  'crun',
   'curl',
   # Not the newest docker CE from official docker repository, but should suffice.
   'docker.io',
   'git',
-  'graphviz',
+  'libncurses6',
   'lcov',
-  'libncurses5',
+  'podman',
   'sudo',
   'systemd',
   'unzip',
@@ -36,7 +41,6 @@ apt_pkg_list = [
   'zip',
 
   'bison',
-  'cmake',
   'flex',
   'libedit-dev',
   'libelf-dev',
@@ -48,13 +52,10 @@ apt_pkg_list = [
   'libltdl-dev',
   'libunwind-dev',
 
-  # Needed by Clang-10.
-  'libz3-4',
-  'libz3-dev',
-
-  # Needed by ANTLR4.
-  'pkg-config',
-  'uuid-dev',
+  'qemu-system-arm',
+  'qemu-system-x86',
+  'qemu-user-static',
+  'qemu-utils',
 ]
 
 apt_package apt_pkg_list do
@@ -65,6 +66,3 @@ execute 'enable docker' do
   command 'systemctl enable docker'
   action :run
 end
-
-include_recipe 'px_dev::linux_clang'
-include_recipe 'px_dev::linux_gcc_musl'

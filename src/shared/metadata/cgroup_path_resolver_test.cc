@@ -214,11 +214,21 @@ constexpr char kTestDataBasePath[] = "src/shared/metadata";
 std::string GetPathToTestDataFile(const std::string& fname) {
   return testing::BazelRunfilePath(std::string(kTestDataBasePath) + "/" + fname);
 }
+
+std::string GetSysFsPathFromTestDataFile(const std::string& fname,
+                                         const std::string& sysfs_prefix) {
+  auto test_data_file_path = GetPathToTestDataFile(fname);
+  auto sysfs_prefix_start = test_data_file_path.find(sysfs_prefix);
+  return test_data_file_path.substr(0, sysfs_prefix_start + sysfs_prefix.size());
+}
 }  // namespace
 
 TEST(LegacyCGroupPathResolverTest, GKEFormat) {
-  ASSERT_OK_AND_ASSIGN(auto path_resolver,
-                       LegacyCGroupPathResolver::Create(GetPathToTestDataFile("testdata/sysfs1")));
+  ASSERT_OK_AND_ASSIGN(
+      auto path_resolver,
+      LegacyCGroupPathResolver::Create(GetSysFsPathFromTestDataFile(
+          "testdata/sysfs1/cgroup/cpu,cpuacct/kubepods/burstable/podabcd/c123/cgroup.procs",
+          "testdata/sysfs1")));
 
   EXPECT_EQ(path_resolver->PodPath(PodQOSClass::kBurstable, "abcd", "c123", ContainerType::kDocker),
             GetPathToTestDataFile(
@@ -236,8 +246,14 @@ TEST(LegacyCGroupPathResolverTest, GKEFormat) {
 }
 
 TEST(LegacyCGroupPathResolverTest, StandardFormat) {
-  ASSERT_OK_AND_ASSIGN(auto path_resolver,
-                       LegacyCGroupPathResolver::Create(GetPathToTestDataFile("testdata/sysfs2")));
+  ASSERT_OK_AND_ASSIGN(
+      auto path_resolver,
+      LegacyCGroupPathResolver::Create(GetSysFsPathFromTestDataFile(
+          "testdata/sysfs2/cgroup/cpu,cpuacct/kubepods.slice/kubepods-burstable.slice/"
+          "kubepods-burstable-pod5a1d1140_a486_478c_afae_bbc975ff9c3b.slice/"
+          "docker-2b41fe4bb7a365960f1e7ed6c09651252b29387b44c9e14ad17e3bc392e7c640.scope/"
+          "cgroup.procs",
+          "testdata/sysfs2")));
 
   EXPECT_EQ(
       GetPathToTestDataFile(
@@ -300,11 +316,17 @@ TEST(LegacyCGroupPathResolverTest, StandardFormat) {
                              ContainerType::kContainerd));
 }
 
-TEST(LeagcyCGroupPathResolverTest, Cgroup2Format) {
-  ASSERT_OK_AND_ASSIGN(auto path_resolver,
-                       LegacyCGroupPathResolver::Create(GetPathToTestDataFile("testdata/sysfs3")));
+TEST(LegacyCGroupPathResolverTest, Cgroup2Format) {
+  PX_SET_FOR_SCOPE(FLAGS_test_only_force_cgroup2_mode, true);
+  ASSERT_OK_AND_ASSIGN(
+      auto path_resolver,
+      LegacyCGroupPathResolver::Create(GetSysFsPathFromTestDataFile(
+          "testdata/sysfs3/cgroup/kubepods.slice/kubepods-besteffort.slice/"
+          "kubepods-besteffort-pod47810e8e_b9cb_4ac6_b12d_9e0577fa8237.slice/"
+          "docker-28efca84cc7d707bdfbc5646144bba6c4417de2cf63f8583179603ce434d6dfe.scope/"
+          "cgroup.procs",
+          "testdata/sysfs3")));
 
-  FLAGS_force_cgroup2_mode = true;
   EXPECT_EQ(
       GetPathToTestDataFile(
           "testdata/sysfs3/cgroup/kubepods.slice/kubepods-besteffort.slice/"
@@ -356,6 +378,17 @@ TEST(CGroupPathResolver, Cgroup2Format) {
       "kubepods-burstable-pod01234567_cccc_dddd_eeee_ffff000011112222.slice/"
       "docker-a7638fe3934b37419cc56bca73465a02b354ba6e98e10272542d84eb2014dd62.scope/cgroup.procs");
 }
+
+/**
+ * TODO(ddelnano): Refactor the cgroup resolver code so that logic within AutoDiscoverCGroupPath
+ * and CGroupBasePaths can be tested. OVH's managed k8s failed to work with our logic because
+ * it enables cgroup v1 and v2 while the PEM existed in a v2 cgroup. Ideally our tests would
+ * cover the following scenarios for both LegacyCGroupPathResolver and CGroupPathResolver:
+ * 1. cgroup1 only
+ * 2. cgroup2 only
+ * 3. cgroup1+cgroup2 w/ cgroup1 failing (gh#XXX bug)
+ * 4. cgroup1+cgroup2 w/ cgroup1 succeeding
+ */
 
 }  // namespace md
 }  // namespace px

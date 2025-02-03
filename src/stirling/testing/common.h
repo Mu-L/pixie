@@ -18,6 +18,10 @@
 
 #pragma once
 
+#include <gtest/gtest.h>
+
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -31,10 +35,13 @@
 #include "src/shared/upid/upid.h"
 #include "src/stirling/core/data_table.h"
 #include "src/stirling/core/output.h"
+#include "src/stirling/testing/overloads.h"
 
 #define ASSERT_NOT_EMPTY_AND_GET_RECORDS(lhs, tablets) \
   ASSERT_EQ(tablets.size(), 1);                        \
   lhs = tablets[0].records;
+
+using ::testing::IsSupersetOf;
 
 namespace px {
 
@@ -66,29 +73,6 @@ MATCHER_P(RecordBatchSizeIs, size, absl::Substitute("is a RecordBatch having $0 
 
 MATCHER(ColWrapperIsEmpty, "is an empty ColumnWrapper") { return arg->Empty(); }
 
-// Create DataTable objects used by SocketConnector::TransferData() to write records to.
-class DataTables {
- public:
-  template <size_t NumTableSchemas>
-  explicit DataTables(
-      const std::array<px::stirling::DataTableSchema, NumTableSchemas>& table_schemas) {
-    uint64_t id = 0;
-    for (const DataTableSchema& table_schema : table_schemas) {
-      auto data_table = std::make_unique<DataTable>(id++, table_schema);
-      data_table_ptrs_.push_back(data_table.get());
-      data_table_uptrs_.push_back(std::move(data_table));
-    }
-  }
-
-  std::vector<DataTable*> tables() { return data_table_ptrs_; }
-
-  DataTable* operator[](int idx) { return data_table_ptrs_[idx]; }
-
- private:
-  std::vector<std::unique_ptr<DataTable>> data_table_uptrs_;
-  std::vector<DataTable*> data_table_ptrs_;
-};
-
 inline std::vector<size_t> FindRecordIdxMatchesPIDs(const types::ColumnWrapperRecordBatch& record,
                                                     int upid_column_idx,
                                                     const std::vector<int>& pids) {
@@ -119,7 +103,7 @@ inline std::shared_ptr<types::ColumnWrapper> SelectColumnWrapperRows(
   for (int idx : indices) {                                             \
     out->Append(src.Get<types::DataTypeTraits<_dt_>::value_type>(idx)); \
   }
-  PL_SWITCH_FOREACH_DATATYPE(src.data_type(), TYPE_CASE);
+  PX_SWITCH_FOREACH_DATATYPE(src.data_type(), TYPE_CASE);
 #undef TYPE_CASE
 
   return out;
@@ -188,6 +172,53 @@ inline types::ColumnWrapperRecordBatch ExtractRecordsMatchingPID(DataTable* data
     }
   }
   return res;
+}
+
+class Timeout {
+ public:
+  explicit Timeout(std::chrono::nanoseconds timeout = std::chrono::minutes{5})
+      : timeout_(timeout), start_(std::chrono::steady_clock::now()) {}
+
+  bool TimedOut() { return !((std::chrono::steady_clock::now() - start_) < timeout_); }
+
+ private:
+  std::chrono::nanoseconds timeout_;
+  std::chrono::time_point<std::chrono::steady_clock> start_;
+};
+
+template <typename TRecord>
+bool RecordsContains(const std::vector<TRecord>& records, const std::vector<TRecord>& expected) {
+  for (const auto& expected_record : expected) {
+    bool in_records = false;
+    for (const auto& r : records) {
+      if (expected_record == r) {
+        in_records = true;
+        break;
+      }
+    }
+    if (!in_records) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// WaitAndExpectRecords calls `get_records` repeatedly until all of the `expected` records are
+// contained in the response to `get_records`. `TRecord` is required to have a operator== overload,
+// and suggested to have a PrintTo overload, see overloads.h for examples. `TGetRecords`
+// should be a function that returns a std::vector<TRecord>.
+template <typename TRecord, typename TGetRecords>
+std::vector<TRecord> WaitAndExpectRecords(
+    TGetRecords get_records, std::vector<TRecord> expected,
+    std::chrono::nanoseconds sleep_time = std::chrono::milliseconds{200}) {
+  std::vector<TRecord> records;
+  Timeout t;
+  while (!RecordsContains(records, expected) && !t.TimedOut()) {
+    records = get_records();
+    std::this_thread::sleep_for(sleep_time);
+  }
+  EXPECT_THAT(records, IsSupersetOf(expected));
+  return records;
 }
 
 }  // namespace testing

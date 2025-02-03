@@ -18,9 +18,15 @@
 
 set -ex
 
+versions_file="$(realpath "${VERSIONS_FILE:?}")"
+manifest_updates="${MANIFEST_UPDATES:?}"
 repo_path=$(pwd)
 release_tag=${TAG_NAME##*/v}
-versions_file="$(pwd)/src/utils/artifacts/artifact_db_updater/VERSIONS.json"
+
+# shellcheck source=ci/image_utils.sh
+. "${repo_path}/ci/image_utils.sh"
+# shellcheck source=ci/artifact_utils.sh
+. "${repo_path}/ci/artifact_utils.sh"
 
 echo "The release tag is: ${release_tag}"
 
@@ -31,31 +37,32 @@ bazel run -c opt //src/utils/artifacts/versions_gen:versions_gen -- \
 tags=$(git for-each-ref --sort='-*authordate' --format '%(refname:short)' refs/tags \
     | grep "release/operator" | grep -v "\-")
 
-public="True"
-image_path="gcr.io/pixie-oss/pixie-prod/operator/operator_image:${release_tag}"
-deleter_image_path="gcr.io/pixie-oss/pixie-prod/operator/vizier_deleter:${release_tag}"
+image_repo="gcr.io/pixie-oss/pixie-prod"
+image_paths=$(bazel cquery //k8s/operator:image_bundle \
+  --//k8s:image_repository="${image_repo}" \
+  --//k8s:image_version="${release_tag}" \
+  --output=starlark \
+  --starlark:expr="'\n'.join(providers(target)['@io_bazel_rules_docker//container:providers.bzl%BundleInfo'].container_images.keys())")
+image_path=$(echo "${image_paths}" | grep -v deleter)
+deleter_image_path=$(echo "${image_paths}" | grep deleter)
+
+bucket="pixie-dev-public"
+
 channel="stable"
 channels="stable,dev"
-bucket="pixie-dev-public"
 # The previous version should be the 2nd item in the tags. Since this is a release build,
 # the first item in the tag is the current release.
 prev_tag=$(echo "$tags" | sed -n '2 p')
 
 if [[ $release_tag == *"-"* ]]; then
-  public="False"
-  image_path="gcr.io/pixie-oss/pixie-dev/operator/operator_image:${release_tag}"
-  deleter_image_path="gcr.io/pixie-oss/pixie-dev/operator/vizier_deleter:${release_tag}"
   channel="dev"
   channels="dev"
-  bucket="pixie-prod-artifacts"
-# The previous version should be the 1st item in the tags. Since this is a non-release build,
-# the first item in the tags is the previous release.
+  # The previous version should be the 1st item in the tags. Since this is a non-release build,
+  # the first item in the tags is the previous release.
   prev_tag=$(echo "$tags" | sed -n '1 p')
 fi
 
-# Push operator image.
-bazel run --stamp -c opt --define BUNDLE_VERSION="${release_tag}" \
-    --stamp --define public="${public}" //k8s/operator:operator_images_push
+push_all_multiarch_images "//k8s/operator:operator_images_push" "//k8s/operator:list_image_bundle" "${release_tag}" "${image_repo}"
 
 # Build operator bundle for OLM.
 tmp_dir="$(mktemp -d)"
@@ -103,12 +110,14 @@ mv "$(pwd)/k8s/operator/helm/templates/deleter_tmp.yaml" "$(pwd)/k8s/operator/he
 cd "${tmp_dir}"
 bundle_image="gcr.io/pixie-oss/pixie-prod/operator/bundle:${release_tag}"
 index_image="gcr.io/pixie-oss/pixie-prod/operator/bundle_index:0.0.1"
-opm alpha bundle generate --package pixie-operator --channels "${channels}" --default "${channel}" --directory manifests
-docker build -t "${bundle_image}" -f bundle.Dockerfile .
-docker push "${bundle_image}"
-opm index add --bundles "${bundle_image}" --from-index "${index_image}" --tag "${index_image}" -u docker
 
-docker push "${index_image}"
+docker buildx create --name builder --driver docker-container --bootstrap
+docker buildx use builder
+
+opm alpha bundle generate --package pixie-operator --channels "${channels}" --default "${channel}" --directory manifests
+docker buildx build --platform linux/amd64,linux/arm64 -t "${bundle_image}" --push -f bundle.Dockerfile .
+opm index add --bundles "${bundle_image}" --from-index "${index_image}" --tag "${index_image}"  --generate --out-dockerfile="${tmp_dir}/index.Dockerfile" -u docker
+docker buildx build --platform linux/amd64,linux/arm64 -t "${index_image}" --push -f "${tmp_dir}/index.Dockerfile" .
 
 cd "${repo_path}"
 
@@ -116,9 +125,9 @@ cd "${repo_path}"
 output_path="gs://${bucket}/operator/${release_tag}"
 bazel build //k8s/operator:operator_templates
 yamls_tar="${repo_path}/bazel-bin/k8s/operator/operator_templates.tar"
-sha256sum "${yamls_tar}" | awk '{print $1}' > tmplSha
-gsutil cp "${yamls_tar}" "${output_path}/operator_template_yamls.tar"
-gsutil cp tmplSha "${output_path}/operator_template_yamls.tar.sha256"
 
+upload_artifact_to_mirrors "operator" "${release_tag}" "${yamls_tar}" "operator_template_yamls.tar" AT_CONTAINER_SET_TEMPLATE_YAMLS
 
 ./ci/operator_helm_build_release.sh "${release_tag}"
+
+create_manifest_update "operator" "${release_tag}" > "${manifest_updates}"

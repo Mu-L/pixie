@@ -200,6 +200,30 @@ class PixieModule : public QLObject {
   Returns:
     px.Time: The time value represented in the data.
   )doc";
+
+  inline static constexpr char kFormatDurationOpID[] = "format_duration";
+  inline static constexpr char kFormatDurationDocstring[] = R"doc(
+  Convert a duration in nanoseconds to a duration string.
+
+  Convert an integer in nanoseconds (-3,000,000,000) to a duration string ("-5m") while
+  preserving the sign. This function converts to whole milliseconds, seconds, minutes,
+  hours or days. This means it will round down to the nearest whole number time unit.
+
+  Examples:
+    # duration = "-5m"
+    duration = px.format_duration(-5 * 60 * 1000 * 1000 * 1000)
+    # duration = "5m" duration is rounded down to nearest whole minute.
+    duration = px.parse_duration(-5 * 60 * 1000 * 1000 * 1000 + 5)
+    # duration = "-5h"
+    duration = px.format_duration(-5 * 60 * 60 * 1000 * 1000 * 1000)
+
+  :topic: compile_time_fn
+
+  Args:
+    duration (int64): The duration in nanoseconds.
+  Returns:
+    string: The string representing the human readable duration (i.e. -5m, -10h).
+  )doc";
   inline static constexpr char kParseDurationOpID[] = "parse_duration";
   inline static constexpr char kParseDurationDocstring[] = R"doc(
   Parse a duration string to a duration in nanoseconds.
@@ -337,7 +361,7 @@ inline Status AddResultSink(IR* graph, const pypa::AstPtr& ast, std::string_view
   // px.display(df, cols=['cols', 'to', 'keep'])
   // So we don't currently support passing those output columns as an argument to display.
   std::vector<std::string> columns;
-  PL_ASSIGN_OR_RETURN(
+  PX_ASSIGN_OR_RETURN(
       auto sink, graph->CreateNode<GRPCSinkIR>(ast, parent_op, std::string(out_name), columns));
   sink->SetDestinationAddress(std::string(result_addr));
   sink->SetDestinationSSLTargetName(std::string(result_ssl_targetname));

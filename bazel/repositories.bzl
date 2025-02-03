@@ -92,7 +92,7 @@ def _local_repo_impl(name, **kwargs):
 def _git_repo(name, **kwargs):
     _git_repo_impl(name, **kwargs)
 
-def _local_repo(name, **kwargs):
+def _local_repo(name, **kwargs):  # buildifier: disable=unused-variable
     _local_repo_impl(name, **kwargs)
 
 # For bazel repos do not require customization.
@@ -105,8 +105,17 @@ def _include_all_repo(name, **kwargs):
     _http_archive_repo_impl(name, **kwargs)
 
 def _com_llvm_lib():
-    _bazel_repo("com_llvm_lib", build_file = "//bazel/external:llvm.BUILD")
-    _bazel_repo("com_llvm_lib_libcpp", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_x86_64_glibc_host", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_libcpp_x86_64_glibc_host", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_libcpp_x86_64_glibc_host_asan", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_libcpp_x86_64_glibc_host_msan", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_libcpp_x86_64_glibc_host_tsan", build_file = "//bazel/external:llvm.BUILD")
+
+    _bazel_repo("com_llvm_lib_x86_64_glibc2_36", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_libcpp_x86_64_glibc2_36", build_file = "//bazel/external:llvm.BUILD")
+
+    _bazel_repo("com_llvm_lib_aarch64_glibc2_36", build_file = "//bazel/external:llvm.BUILD")
+    _bazel_repo("com_llvm_lib_libcpp_aarch64_glibc2_36", build_file = "//bazel/external:llvm.BUILD")
 
 def _cc_deps():
     # Dependencies with native bazel build files.
@@ -115,7 +124,7 @@ def _cc_deps():
     _bazel_repo("com_google_protobuf", patches = ["//bazel/external:protobuf_gogo_hack.patch", "//bazel/external:protobuf_text_format.patch", "//bazel/external:protobuf_warning.patch"], patch_args = ["-p1"])
     _bazel_repo("com_github_grpc_grpc", patches = ["//bazel/external:grpc.patch", "//bazel/external:grpc_go_toolchain.patch", "//bazel/external:grpc_test_visibility.patch"], patch_args = ["-p1"])
 
-    _bazel_repo("boringssl")
+    _bazel_repo("boringssl", patches = ["//bazel/external:boringssl.patch"], patch_args = ["-p0"])
     _bazel_repo("com_google_benchmark")
     _bazel_repo("com_google_googletest")
     _bazel_repo("com_github_gflags_gflags")
@@ -138,19 +147,17 @@ def _cc_deps():
     _bazel_repo("com_github_ariafallah_csv_parser", build_file = "//bazel/external:csv_parser.BUILD")
     _bazel_repo("com_github_arun11299_cpp_jwt", build_file = "//bazel/external:cpp_jwt.BUILD")
     _bazel_repo("com_github_cameron314_concurrentqueue", build_file = "//bazel/external:concurrentqueue.BUILD")
-    _bazel_repo("com_github_cmcqueen_aes_min", patches = ["//bazel/external:aes_min.patch"], patch_args = ["-p1"], build_file = "//bazel/external:aes_min.BUILD")
     _bazel_repo("com_github_cyan4973_xxhash", build_file = "//bazel/external:xxhash.BUILD")
     _bazel_repo("com_github_nlohmann_json", build_file = "//bazel/external:nlohmann_json.BUILD")
     _bazel_repo("com_github_packetzero_dnsparser", build_file = "//bazel/external:dnsparser.BUILD")
-    _bazel_repo("com_github_rlyeh_sole", build_file = "//bazel/external:sole.BUILD")
+    _bazel_repo("com_github_rlyeh_sole", patches = ["//bazel/external:sole.patch"], patch_args = ["-p1"], build_file = "//bazel/external:sole.BUILD")
     _bazel_repo("com_github_serge1_elfio", build_file = "//bazel/external:elfio.BUILD")
     _bazel_repo("com_github_derrickburns_tdigest", build_file = "//bazel/external:tdigest.BUILD")
     _bazel_repo("com_github_tencent_rapidjson", build_file = "//bazel/external:rapidjson.BUILD")
     _bazel_repo("com_github_vinzenz_libpypa", build_file = "//bazel/external:libpypa.BUILD")
     _bazel_repo("com_google_double_conversion", build_file = "//bazel/external:double_conversion.BUILD")
     _bazel_repo("com_github_google_sentencepiece", build_file = "//bazel/external:sentencepiece.BUILD", patches = ["//bazel/external:sentencepiece.patch"], patch_args = ["-p1"])
-    _bazel_repo("com_github_util_linux_libuuid", build_file = "//bazel/external:libuuid.BUILD")
-    _bazel_repo("com_github_antlr_antlr4", build_file = "//bazel/external:antlr4.BUILD", patches = ["//bazel/external:antlr4.patch"], patch_args = ["-p1"])
+    _bazel_repo("com_github_antlr_antlr4", build_file = "//bazel/external:antlr4.BUILD")
     _bazel_repo("com_github_antlr_grammars_v4", build_file = "//bazel/external:antlr_grammars.BUILD", patches = ["//bazel/external:antlr_grammars.patch"], patch_args = ["-p1"])
     _bazel_repo("com_github_pgcodekeeper_pgcodekeeper", build_file = "//bazel/external:pgsql_grammar.BUILD", patches = ["//bazel/external:pgsql_grammar.patch"], patch_args = ["-p1"])
     _bazel_repo("com_github_simdutf_simdutf", build_file = "//bazel/external:simdutf.BUILD")
@@ -160,6 +167,7 @@ def _cc_deps():
     _bazel_repo("com_github_opentelemetry_proto", build_file = "//bazel/external:opentelemetry.BUILD")
     _bazel_repo("com_github_uriparser_uriparser", build_file = "//bazel/external:uriparser.BUILD")
     _bazel_repo("com_github_libbpf_libbpf", build_file = "//bazel/external:libbpf.BUILD")
+    _bazel_repo("com_github_mongodb_mongo_c_driver", build_file = "//bazel/external:mongo_c_driver.BUILD")
 
     # Uncomment these to develop bcc and/or bpftrace locally. Should also comment out the corresponding _bazel_repo lines.
     # _local_repo("com_github_iovisor_bcc", build_file = "//bazel/external/local_dev:bcc.BUILD")
@@ -172,10 +180,11 @@ def _cc_deps():
 
     # Dependencies used in foreign cc rules (e.g. cmake-based builds)
     _include_all_repo("com_github_gperftools_gperftools")
-    _include_all_repo("com_github_openssl_openssl")
     _include_all_repo("com_github_nats_io_natsc")
     _include_all_repo("com_github_libuv_libuv", patches = ["//bazel/external:libuv.patch"], patch_args = ["-p1"])
     _include_all_repo("com_github_libarchive_libarchive", patches = ["//bazel/external:libarchive.patch"], patch_args = ["-p1"])
+
+    _bazel_repo("org_libc_musl", build_file = "//bazel/external:musl.BUILD")
 
 def _java_deps():
     _bazel_repo("com_oracle_openjdk_18", build_file = "//bazel/external:jdk_includes.BUILD")
@@ -185,36 +194,43 @@ def _java_deps():
         prefix = "remotejdk_openjdk_graal",
         target_compatible_with = [
             "@platforms//os:linux",
-            "@platforms//cpu:x86_64",
         ],
         sha256 = "102db28b450ff5eb8c497aacaececc5263a4e50e64b7cdc5c7baa8b216e73531",
         urls = [
+            "https://github.com/pixie-io/dev-artifacts/releases/download/graalvm%2Fpl1/graalvm-native-image-22.3.0-pl1.tar.gz",
             "https://storage.googleapis.com/pixie-dev-public/graalvm-native-image-22.3.0-pl1.tar.gz",
         ],
     )
 
 def _list_pl_deps(name):
-    repo_urls = list()
-    for repo_name, repo_config in REPOSITORY_LOCATIONS.items():
+    modules = dict()
+    for _, repo_config in REPOSITORY_LOCATIONS.items():
+        if "manual_license_name" in repo_config:
+            modules["#manual-license-name:" + repo_config["manual_license_name"]] = True
+            continue
         urls = repo_config["urls"]
         best_url = None
         for url in urls:
             if url.startswith("https://github.com") or best_url == None:
                 best_url = url
-        repo_urls.append(best_url)
+        modules[best_url] = True
 
-    for repo_name, repo_config in GIT_REPOSITORY_LOCATIONS.items():
+    for _, repo_config in GIT_REPOSITORY_LOCATIONS.items():
         remote = repo_config["remote"]
         if remote.endswith(".git"):
             remote = remote[:-len(".git")]
         if repo_config["commit"]:
             remote = remote + "/commit/" + repo_config["commit"]
-        repo_urls.append(remote)
+        modules[remote] = True
+
+    module_lines = []
+    for key in modules.keys():
+        module_lines.append(key)
 
     native.genrule(
         name = name,
         outs = ["{}.out".format(name)],
-        cmd = 'echo "{}" > $@'.format("\n".join(repo_urls)),
+        cmd = 'echo "{}" > $@'.format("\n".join(module_lines)),
         visibility = ["//visibility:public"],
     )
 
@@ -224,13 +240,13 @@ def _pl_cc_toolchain_deps():
 
 def _pl_deps():
     _bazel_repo("bazel_gazelle")
-    _bazel_repo("io_bazel_rules_go")
+    _bazel_repo("io_bazel_rules_go", patches = ["//bazel/external:rules_go.patch"], patch_args = ["-p1"])
     _bazel_repo("io_bazel_rules_scala")
     _bazel_repo("rules_jvm_external")
     _bazel_repo("rules_foreign_cc")
     _bazel_repo("io_bazel_rules_k8s")
     _bazel_repo("io_bazel_rules_closure")
-    _bazel_repo("io_bazel_rules_docker", patches = ["//bazel/external:rules_docker.patch"], patch_args = ["-p1"])
+    _bazel_repo("io_bazel_rules_docker", patches = ["//bazel/external:rules_docker.patch", "//bazel/external:rules_docker_arch.patch"], patch_args = ["-p1"])
     _bazel_repo("rules_python")
     _bazel_repo("rules_pkg")
     _bazel_repo("com_github_bazelbuild_buildtools")

@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary", "pl_go_image")
 
@@ -29,6 +28,7 @@ go_library(
         "//src/utils/shared/k8s",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_client_go//discovery",
         "@io_k8s_client_go//kubernetes/scheme",
         "@io_k8s_client_go//rest",
         "@io_k8s_sigs_controller_runtime//:controller-runtime",
@@ -47,13 +47,4 @@ pl_go_image(
     visibility = [
         "//k8s:__subpackages__",
     ],
-)
-
-container_push(
-    name = "push_operator_image",
-    format = "Docker",
-    image = ":operator_image",
-    registry = "gcr.io",
-    repository = "pl-dev-infra/vizier/operator_image",
-    tag = "{STABLE_BUILD_TAG}",
 )

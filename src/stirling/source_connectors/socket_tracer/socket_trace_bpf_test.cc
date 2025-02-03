@@ -28,6 +28,7 @@
 
 #include "src/common/fs/temp_file.h"
 #include "src/common/system/clock.h"
+#include "src/common/system/kernel_version.h"
 #include "src/common/system/tcp_socket.h"
 #include "src/common/system/udp_socket.h"
 #include "src/common/system/unix_socket.h"
@@ -38,6 +39,7 @@
 #include "src/stirling/source_connectors/socket_tracer/bcc_bpf_intf/socket_trace.hpp"
 #include "src/stirling/source_connectors/socket_tracer/socket_trace_connector.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/client_server_system.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/protocol_checkers.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/common.h"
 
@@ -45,11 +47,14 @@ namespace px {
 namespace stirling {
 
 using ::px::stirling::testing::FindRecordsMatchingPID;
+using ::px::stirling::testing::GetLocalAddrs;
+using ::px::stirling::testing::GetLocalPorts;
 using ::px::stirling::testing::RecordBatchSizeIs;
 using ::px::system::TCPSocket;
 using ::px::system::UDPSocket;
 using ::px::system::UnixSocket;
 using ::px::types::ColumnWrapperRecordBatch;
+using ::testing::Contains;
 using ::testing::HasSubstr;
 using ::testing::StrEq;
 
@@ -97,7 +102,7 @@ class SocketTraceBPFTest
     : public testing::SocketTraceBPFTestFixture</* TClientSideTracing */ true> {
  protected:
   StatusOr<const ConnTracker*> GetConnTracker(int pid, int fd) {
-    PL_ASSIGN_OR_RETURN(const ConnTracker* tracker, source_->GetConnTracker(pid, fd));
+    PX_ASSIGN_OR_RETURN(const ConnTracker* tracker, source_->GetConnTracker(pid, fd));
     if (tracker == nullptr) {
       return error::Internal("No ConnTracker found for pid=$0 fd=$1", pid, fd);
     }
@@ -305,7 +310,7 @@ TEST_F(SocketTraceBPFTest, FileIONotTraced) {
   close(fd1);
 
   // Finally drain all BPF events.
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   // Those to file I/O FDs should not have been reported.
   ASSERT_NOT_OK(GetConnTracker(getpid(), fd1));
@@ -358,7 +363,7 @@ TEST_F(SocketTraceBPFTest, NonInetTrafficNotTraced) {
   server_thread.join();
 
   // Finally drain all BPF events.
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   // Those to file I/O FDs should not have been reported.
   ASSERT_NOT_OK(GetConnTracker(getpid(), client_fd));
@@ -378,7 +383,7 @@ TEST_F(SocketTraceBPFTest, NoProtocolWritesNotCaptured) {
   testing::ClientServerSystem system;
   system.RunClientServer<&TCPSocket::Read, &TCPSocket::Write>(script);
 
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   // We expect to see a ConnTracker allocated for ConnStats, but the data buffers should be empty
   // for unknown or unsupported protocols.
@@ -489,9 +494,9 @@ TEST_F(SocketTraceBPFTest, LargeMessages) {
   std::string large_response =
       "HTTP/1.1 200 OK\r\n"
       "Content-Type: application/json; msg2\r\n"
-      "Content-Length: 131072\r\n"
+      "Content-Length: 3512768\r\n"
       "\r\n";
-  large_response += std::string(131072, '+');
+  large_response += std::string(3512768, '+');
 
   testing::SendRecvScript script({
       {{kHTTPReqMsg1}, {large_response}},
@@ -500,25 +505,35 @@ TEST_F(SocketTraceBPFTest, LargeMessages) {
   testing::ClientServerSystem system;
   system.RunClientServer<&TCPSocket::Recv, &TCPSocket::Send>(script);
 
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   ASSERT_OK_AND_ASSIGN(auto* client_tracker,
                        GetMutableConnTracker(system.ClientPID(), system.ClientFD()));
   EXPECT_EQ(client_tracker->send_data().data_buffer().Head(), kHTTPReqMsg1);
   std::string client_recv_data(client_tracker->recv_data().data_buffer().Head());
-  EXPECT_THAT(client_recv_data.size(), 131153);
+  EXPECT_THAT(client_recv_data.size(), 3512850);
   EXPECT_THAT(client_recv_data, HasSubstr("+++++"));
   EXPECT_EQ(client_recv_data.substr(client_recv_data.size() - 5, 5), "+++++");
 
-  // The server's send syscall transmits all 131153 bytes in one shot.
+  // The server's send syscall transmits all 3512850 bytes in one shot.
   // This is over the limit that we can transmit through BPF, and so we expect
-  // filler bytes on this side of the connection. Note that the client doesn't have the
+  // filler bytes on this side of the connection (up to 1MB). Note that the client doesn't have the
   // same behavior, because the recv syscall provides the data in chunks.
   ASSERT_OK_AND_ASSIGN(auto* server_tracker,
                        GetMutableConnTracker(system.ServerPID(), system.ServerFD()));
   EXPECT_EQ(server_tracker->recv_data().data_buffer().Head(), kHTTPReqMsg1);
   std::string server_send_data(server_tracker->send_data().data_buffer().Head());
-  EXPECT_THAT(server_send_data.size(), 131153);
+  auto kernel = system::GetCachedKernelVersion();
+  bool kernelGreaterThan5_1 = kernel.version >= 5 || (kernel.version == 5 && kernel.major_rev >= 1);
+  if (kernelGreaterThan5_1) {
+    // CHUNK_LIMIT * MAX_MSG_SIZE bytes + up to 1MB filler.
+    // Currently 84*30720 + 932,370 filler bytes = 3,512,850
+    EXPECT_THAT(server_send_data.size(), 3512850);
+  } else {
+    // CHUNK_LIMIT * MAX_MSG_SIZE bytes + up to 1MB filler.
+    // Currently 4*30720 + 1024*1024 = 1,171,456, leaving gap of 2,341,394 bytes
+    EXPECT_THAT(server_send_data.size(), 1171456);
+  }
   EXPECT_THAT(server_send_data, HasSubstr("+++++"));
   // We expect filling with \0 bytes.
   EXPECT_EQ(server_send_data.substr(server_send_data.size() - 5, 5), ConstStringView("\0\0\0\0\0"));
@@ -588,13 +603,13 @@ TEST_F(SocketTraceBPFTest, SendFile) {
 
   ASSERT_THAT(records, RecordBatchSizeIs(2));
 
-  // Time ordering by response means that we should get server entry first, then client entry.
-  std::string server_body = records[kHTTPRespBodyIdx]->Get<types::StringValue>(0);
-  std::string client_body = records[kHTTPRespBodyIdx]->Get<types::StringValue>(1);
+  const absl::flat_hash_set<std::string> responses{
+      records[kHTTPRespBodyIdx]->Get<types::StringValue>(0),
+      records[kHTTPRespBodyIdx]->Get<types::StringValue>(1)};
 
   const std::string kHTTPRespMsgContentAsFiller(kHTTPRespMsgContent.size(), 0);
-  EXPECT_EQ(server_body, kHTTPRespMsgContentAsFiller);
-  EXPECT_EQ(client_body, kHTTPRespMsgContent);
+  EXPECT_THAT(responses, Contains(kHTTPRespMsgContentAsFiller));
+  EXPECT_THAT(responses, Contains(kHTTPRespMsgContent));
 }
 
 using NullRemoteAddrTest = testing::SocketTraceBPFTestFixture</* TClientSideTracing */ false>;
@@ -735,6 +750,155 @@ TEST_F(NullRemoteAddrTest, IPv6Accept4WithNullRemoteAddr) {
   EXPECT_EQ(records[kHTTPRemotePortIdx]->Get<types::Int64Value>(0), port);
 }
 
+using LocalAddrTest = testing::SocketTraceBPFTestFixture</* TClientSideTracing */ true>;
+
+TEST_F(LocalAddrTest, IPv4ConnectPopulatesLocalAddr) {
+  StartTransferDataThread();
+
+  TCPSocket client;
+  TCPSocket server;
+
+  std::atomic<bool> server_ready = true;
+
+  std::thread server_thread([&server, &server_ready]() {
+    server.BindAndListen();
+    server_ready = true;
+    auto conn = server.Accept(/* populate_remote_addr */ true);
+
+    std::string data;
+
+    conn->Read(&data);
+    conn->Write(kHTTPRespMsg1);
+  });
+
+  // Wait for server thread to start listening.
+  while (!server_ready) {
+  }
+  // After server_ready, server.Accept() needs to enter the accepting state, before the client
+  // connection can succeed below. We don't have a simple and robust way to signal that from inside
+  // the server thread, so we just use sleep to avoid the race condition.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  std::thread client_thread([&client, &server]() {
+    client.Connect(server);
+
+    std::string data;
+
+    client.Write(kHTTPReqMsg1);
+    client.Read(&data);
+  });
+
+  server_thread.join();
+  client_thread.join();
+
+  // Get the remote port seen by server from client's local port.
+  struct sockaddr_in client_sockaddr = {};
+  socklen_t client_sockaddr_len = sizeof(client_sockaddr);
+  struct sockaddr* client_sockaddr_ptr = reinterpret_cast<struct sockaddr*>(&client_sockaddr);
+  ASSERT_EQ(getsockname(client.sockfd(), client_sockaddr_ptr, &client_sockaddr_len), 0);
+
+  // Close after getting the sockaddr from fd, otherwise getsockname() wont work.
+  client.Close();
+  server.Close();
+
+  StopTransferDataThread();
+
+  std::vector<TaggedRecordBatch> tablets = ConsumeRecords(kHTTPTableNum);
+  ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& record_batch, tablets);
+
+  std::vector<size_t> indices =
+      testing::FindRecordIdxMatchesPID(record_batch, kHTTPUPIDIdx, getpid());
+  ColumnWrapperRecordBatch records = testing::SelectRecordBatchRows(record_batch, indices);
+
+  ASSERT_THAT(records, RecordBatchSizeIs(2));
+
+  // Make sure that the socket info resolution works.
+  ASSERT_OK_AND_ASSIGN(std::string remote_addr, IPv4AddrToString(client_sockaddr.sin_addr));
+  EXPECT_THAT(GetLocalAddrs(records, kHTTPLocalAddrIdx, indices), Contains("127.0.0.1").Times(2));
+  EXPECT_EQ(remote_addr, "127.0.0.1");
+
+  bool found_port = false;
+  uint16_t port = ntohs(client_sockaddr.sin_port);
+  for (auto lport : GetLocalPorts(records, kHTTPLocalPortIdx, indices)) {
+    if (lport == port) {
+      found_port = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_port);
+}
+
+TEST_F(LocalAddrTest, IPv6ConnectPopulatesLocalAddr) {
+  StartTransferDataThread();
+
+  TCPSocket client(AF_INET6);
+  TCPSocket server(AF_INET6);
+
+  std::atomic<bool> server_ready = false;
+
+  std::thread server_thread([&server, &server_ready]() {
+    server.BindAndListen();
+    server_ready = true;
+    auto conn = server.Accept(/* populate_remote_addr */ false);
+
+    std::string data;
+
+    conn->Read(&data);
+    conn->Write(kHTTPRespMsg1);
+  });
+
+  while (!server_ready) {
+  }
+
+  std::thread client_thread([&client, &server]() {
+    client.Connect(server);
+
+    std::string data;
+
+    client.Write(kHTTPReqMsg1);
+    client.Read(&data);
+  });
+
+  server_thread.join();
+  client_thread.join();
+
+  // Get the remote port seen by server from client's local port.
+  struct sockaddr_in6 client_sockaddr = {};
+  socklen_t client_sockaddr_len = sizeof(client_sockaddr);
+  struct sockaddr* client_sockaddr_ptr = reinterpret_cast<struct sockaddr*>(&client_sockaddr);
+  ASSERT_EQ(getsockname(client.sockfd(), client_sockaddr_ptr, &client_sockaddr_len), 0);
+
+  // Close after getting the sockaddr from fd, otherwise getsockname() wont work.
+  client.Close();
+  server.Close();
+
+  StopTransferDataThread();
+
+  std::vector<TaggedRecordBatch> tablets = ConsumeRecords(kHTTPTableNum);
+  ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& record_batch, tablets);
+
+  std::vector<size_t> indices =
+      testing::FindRecordIdxMatchesPID(record_batch, kHTTPUPIDIdx, getpid());
+  ColumnWrapperRecordBatch records = testing::SelectRecordBatchRows(record_batch, indices);
+
+  ASSERT_THAT(records, RecordBatchSizeIs(2));
+
+  // Make sure that the socket info resolution works.
+  ASSERT_OK_AND_ASSIGN(std::string remote_addr, IPv6AddrToString(client_sockaddr.sin6_addr));
+  EXPECT_THAT(GetLocalAddrs(records, kHTTPLocalAddrIdx, indices), Contains("::1").Times(2));
+  EXPECT_EQ(remote_addr, "::1");
+
+  bool found_port = false;
+  uint16_t port = ntohs(client_sockaddr.sin6_port);
+  for (auto lport : GetLocalPorts(records, kHTTPLocalPortIdx, indices)) {
+    if (lport == port) {
+      found_port = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_port);
+}
+
 // Run a UDP-based client-server system.
 class UDPSocketTraceBPFTest : public SocketTraceBPFTest {
  protected:
@@ -748,7 +912,7 @@ class UDPSocketTraceBPFTest : public SocketTraceBPFTest {
 
     // Drain the perf buffers before beginning the test to make sure perf buffers are empty.
     // Otherwise, the test may flake due to events not being received in user-space.
-    source_->PollPerfBuffers();
+    source_->BCC().PollPerfBuffers();
 
     // Uncomment to enable tracing:
     // FLAGS_stirling_conn_trace_pid = pid_;
@@ -775,7 +939,7 @@ TEST_F(UDPSocketTraceBPFTest, UDPSendToRecvFrom) {
   ASSERT_EQ(client_remote.sin_port, server_.port());
   EXPECT_EQ(client_recv_data, kHTTPRespMsg1);
 
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   ASSERT_OK_AND_ASSIGN(auto* tracker, GetMutableConnTracker(pid_, client_.sockfd()));
   EXPECT_EQ(tracker->send_data().data_buffer().Head(), kHTTPReqMsg1);
@@ -802,7 +966,7 @@ TEST_F(UDPSocketTraceBPFTest, UDPSendMsgRecvMsg) {
   ASSERT_EQ(client_remote.sin_port, server_.port());
   EXPECT_EQ(client_recv_data, kHTTPRespMsg1);
 
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   ASSERT_OK_AND_ASSIGN(auto* tracker, GetMutableConnTracker(pid_, client_.sockfd()));
   EXPECT_EQ(tracker->send_data().data_buffer().Head(), kHTTPReqMsg1);
@@ -829,7 +993,7 @@ TEST_F(UDPSocketTraceBPFTest, UDPSendMMsgRecvMMsg) {
   ASSERT_EQ(client_remote.sin_port, server_.port());
   EXPECT_EQ(client_recv_data, kHTTPRespMsg1);
 
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   ASSERT_OK_AND_ASSIGN(auto* tracker, GetMutableConnTracker(pid_, client_.sockfd()));
   EXPECT_EQ(tracker->send_data().data_buffer().Head(), kHTTPReqMsg1);
@@ -864,7 +1028,7 @@ TEST_F(UDPSocketTraceBPFTest, NonBlockingRecv) {
   ASSERT_EQ(client_remote.sin_port, server_.port());
   EXPECT_EQ(recv_data, kHTTPRespMsg1);
 
-  source_->PollPerfBuffers();
+  source_->BCC().PollPerfBuffers();
 
   ASSERT_OK_AND_ASSIGN(auto* tracker, GetMutableConnTracker(pid_, client_.sockfd()));
   EXPECT_EQ(tracker->send_data().data_buffer().Head(), kHTTPReqMsg1);

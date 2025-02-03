@@ -7,13 +7,14 @@
 [![Twitter](https://img.shields.io/twitter/url/https/twitter.com/pixie_run.svg?style=social&label=Follow%20%40pixie_run)](https://twitter.com/pixie_run)
 [![Mentioned in Awesome Kubernetes](https://awesome.re/mentioned-badge.svg)](https://github.com/ramitsurana/awesome-kubernetes)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
-[![Build Status](https://jenkins.corp.pixielabs.ai/buildStatus/icon?job=pixie-oss%2Fbuild-and-test-all)](https://jenkins.corp.pixielabs.ai/job/pixie-oss/job/build-and-test-all/)
+[![Build Status](https://github.com/pixie-io/pixie/actions/workflows/build_and_test.yaml/badge.svg?branch=main)](https://github.com/pixie-io/pixie/actions/workflows/build_and_test.yaml)
 [![codecov](https://codecov.io/gh/pixie-io/pixie/branch/main/graph/badge.svg?token=UG7P3QE5PQ)](https://codecov.io/gh/pixie-io/pixie)
 [![FOSSA Status](https://app.fossa.com/api/projects/custom%2B26327%2Fgithub.com%2Fpixie-io%2Fpixie.svg?type=shield)](https://app.fossa.com/projects/custom%2B26327%2Fgithub.com%2Fpixie-io%2Fpixie?ref=badge_shield)
 [![Artifact HUB](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/pixie-operator)](https://artifacthub.io/packages/olm/community-operators/pixie-operator)
 [![Go Report Card](https://goreportcard.com/badge/px.dev/pixie)](https://goreportcard.com/report/px.dev/pixie)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/5027/badge)](https://bestpractices.coreinfrastructure.org/projects/5027)
 [![CLOMonitor](https://img.shields.io/endpoint?url=https://clomonitor.io/api/projects/cncf/pixie/badge)](https://clomonitor.io/projects/cncf/pixie)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pixie-io/pixie/badge)](https://api.securityscorecards.dev/projects/github.com/pixie-io/pixie)
 
 <br>
 
@@ -168,10 +169,18 @@ Pixie is a community-driven project; we welcome your contribution! For code cont
 - File a [GitHub issue](https://github.com/pixie-io/pixie/issues) to report a bug or request a feature.
 - Join our [Slack](https://slackin.px.dev) for live conversations and quick questions. We are also available on the [CNCF slack](https://slack.cncf.io/app_redirect?channel=pixie").
 - Follow us on [Twitter](https://twitter.com/pixie_run) and [YouTube](https://www.youtube.com/channel/UCOMCDRvBVNIS0lCyOmst7eg).
-- Join our monthly [community meetings](https://px.dev/community/#events).
+- Add our community meeting [calendar](https://calendar.google.com/calendar/u/0?cid=Y181OTA0Y2ZmNzdhNzdhOGYzMzQxNmNmMjQzODI4ZjY4ZGY5MWMzYzEzZWU3YmQ5NGFjODUzMmRiODg2Y2VjMjkxQGdyb3VwLmNhbGVuZGFyLmdvb2dsZS5jb20).
 - Provide feedback on our [roadmap](https://docs.px.dev/about-pixie/roadmap/).
 
 <br clear="all">
+
+## Latest Releases
+We version separate components of Pixie separately, so what Github shows as the "latest" release will only be the latest for one of the components.
+We maintain links to the latest releases for all components here:
+- [CLI v0.8.8](https://github.com/pixie-io/pixie/releases/tag/release/cli/v0.8.8)<!--cli-latest-release-->
+- [Cloud v0.1.8](https://github.com/pixie-io/pixie/releases/tag/release/cloud/v0.1.8)<!--cloud-latest-release-->
+- [Vizier v0.14.15](https://github.com/pixie-io/pixie/releases/tag/release/vizier/v0.14.15)<!--vizier-latest-release-->
+- [Operator v0.1.7](https://github.com/pixie-io/pixie/releases/tag/release/operator/v0.1.7)<!--operator-latest-release-->
 
 ## Changelog
 
@@ -199,6 +208,10 @@ The known adopters and users of Pixie are listed [here](ADOPTERS.md).
 
 We publish a list of all the components Pixie depends on and the corresponding
 versions and licenses [here](https://storage.googleapis.com/pixie-dev-public/oss-licenses/latest.json).
+
+## Acknowledgements
+
+The Pixie project would like to thank [Equinix Metal](https://www.equinix.com/) via the [CNCF Community Infrastructure Lab](https://github.com/cncf/cluster) for graciously providing compute resources to run all the CI/CD for the project.
 
 ## About Pixie
 

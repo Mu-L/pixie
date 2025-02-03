@@ -13,16 +13,23 @@ output:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  # TODO(ddelnano): Remove once typecheck is upgraded in next golangci-lint upgrade
+  # This error originates from the stdlib due to generics usage
+  exclude-rules:
+  - path: .*slices\/sort.go
+    linters:
+    - typecheck
+    text: "^(undefined: (min|max))"
 
 linters:
   enable:
   - asciicheck
-  - deadcode
   - errcheck
   # Although goimports includes gofmt, it doesn't support the simplify option.
   # So we include gofmt here.
   - gofmt
   - gosimple
+  - govet
   - ineffassign
   - makezero
   - misspell
@@ -30,12 +37,12 @@ linters:
   - nolintlint
   - nonamedreturns
   - predeclared
+  - revive
   - staticcheck
   # https://github.com/golangci/golangci-lint/issues/2649
   # - structcheck
   - typecheck
   - unused
-  - varcheck
   # https://github.com/golangci/golangci-lint/issues/2649
   # - wastedassign
   - whitespace
@@ -43,14 +50,12 @@ linters:
   # The following linters are run separately by arcanist at the moment.
   # This is because we have autofix hooks for these linters.
   - goimports
-  - golint
-  - govet
   disable-all: false
 
 linters-settings:
   errcheck:
     # yamllint disable-line rule:line-length
-    ignore: io:Close,github.com/fatih/color,github.com/spf13/pflag:MarkHidden,github.com/spf13/viper:(BindEnv|BindPFlag),github.com/spf13/cobra:(Help|MarkFlagRequired|Usage),gopkg.in/segmentio/analytics-go.v3:Enqueue,database/sql:Rollback,github.com/nats-io/nats.go:Unsubscribe
+    ignore: io:Close,github.com/fatih/color,github.com/spf13/pflag:MarkHidden,github.com/spf13/viper:(BindEnv|BindPFlag),github.com/spf13/cobra:(Help|MarkFlagRequired|Usage),github.com/segmentio/analytics-go/v3:Enqueue,database/sql:Rollback,github.com/nats-io/nats.go:Unsubscribe
   goimports:
     local-prefixes: px.dev
   nakedret:

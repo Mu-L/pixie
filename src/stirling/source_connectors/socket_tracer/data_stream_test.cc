@@ -49,7 +49,8 @@ class DataStreamTest : public ::testing::Test {
 
   void TearDown() override {
     TestOnlyResetMetricsRegistry();
-    SocketTracerMetrics::TestOnlyResetProtocolMetrics(kProtocolHTTP);
+    SocketTracerMetrics::TestOnlyResetProtocolMetrics(kProtocolHTTP, kSSLNone);
+    SocketTracerMetrics::TestOnlyResetProtocolMetrics(kProtocolHTTP, kSSLUnspecified);
   }
 
   std::chrono::steady_clock::time_point now() {
@@ -74,28 +75,35 @@ TEST_F(DataStreamTest, LostEvent) {
 
   // Start off with no lost events.
   stream.AddData(std::move(req0));
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), SizeIs(1));
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], SizeIs(1));
 
   // Now add some lost events - should get skipped over.
-  PL_UNUSED(req1);  // Lost event.
+  PX_UNUSED(req1);  // Lost event.
   stream.AddData(std::move(req2));
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), SizeIs(2));
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], SizeIs(2));
 
   // Some more requests, and another lost request (this time undetectable).
   stream.AddData(std::move(req3));
-  PL_UNUSED(req4);
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), SizeIs(3));
+  PX_UNUSED(req4);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], SizeIs(3));
 
   // Now the lost event should be detected.
   stream.AddData(std::move(req5));
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), SizeIs(4));
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], SizeIs(4));
 
-  EXPECT_EQ(req1->msg.size() + req4->msg.size(),
-            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+  EXPECT_EQ(
+      req1->msg.size() + req4->msg.size(),
+      SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
 }
 
 TEST_F(DataStreamTest, StuckTemporarily) {
@@ -111,22 +119,26 @@ TEST_F(DataStreamTest, StuckTemporarily) {
   stream.set_protocol(kProtocolHTTP);
   stream.AddData(std::move(req0a));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), IsEmpty());
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], IsEmpty());
 
   // Remaining data arrives in time, so stuck count never gets high enough to flush events.
   stream.AddData(std::move(req0b));
   stream.AddData(std::move(req1));
   stream.AddData(std::move(req2));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  const auto& requests = stream.Frames<http::Message>();
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  const auto& requests = stream.Frames<http::stream_id_t, http::Message>()[0];
   ASSERT_THAT(requests, SizeIs(3));
   EXPECT_EQ(requests[0].req_path, "/index.html");
   EXPECT_EQ(requests[1].req_path, "/foo.html");
   EXPECT_EQ(requests[2].req_path, "/bar.html");
 
-  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+  EXPECT_EQ(
+      0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
 }
 
 TEST_F(DataStreamTest, StuckTooLong) {
@@ -143,8 +155,9 @@ TEST_F(DataStreamTest, StuckTooLong) {
   stream.set_current_time(now());
   stream.AddData(std::move(req0a));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), IsEmpty());
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], IsEmpty());
 
   stream.set_current_time(now() + std::chrono::seconds(FLAGS_buffer_expiration_duration_secs));
 
@@ -154,14 +167,17 @@ TEST_F(DataStreamTest, StuckTooLong) {
   stream.AddData(std::move(req1));
   stream.AddData(std::move(req2));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  const auto& requests = stream.Frames<http::Message>();
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  const auto& requests = stream.Frames<http::stream_id_t, http::Message>()[0];
   ASSERT_THAT(requests, SizeIs(2));
   EXPECT_EQ(requests[0].req_path, "/foo.html");
   EXPECT_EQ(requests[1].req_path, "/bar.html");
 
-  EXPECT_EQ(kHTTPReq0.length(),
-            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+  EXPECT_EQ(
+      kHTTPReq0.length(),
+      SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
 }
 
 TEST_F(DataStreamTest, PartialMessageRecovery) {
@@ -177,17 +193,20 @@ TEST_F(DataStreamTest, PartialMessageRecovery) {
   stream.set_protocol(kProtocolHTTP);
   stream.AddData(std::move(req0));
   stream.AddData(std::move(req1a));
-  PL_UNUSED(req1b);  // Missing event.
+  PX_UNUSED(req1b);  // Missing event.
   stream.AddData(std::move(req2));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  const auto& requests = stream.Frames<http::Message>();
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  const auto& requests = stream.Frames<http::stream_id_t, http::Message>()[0];
   ASSERT_THAT(requests, SizeIs(2));
   EXPECT_EQ(requests[0].req_path, "/index.html");
   EXPECT_EQ(requests[1].req_path, "/bar.html");
 
-  EXPECT_EQ(kHTTPReq1.length(),
-            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+  EXPECT_EQ(
+      kHTTPReq1.length(),
+      SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
 }
 
 TEST_F(DataStreamTest, HeadAndMiddleMissing) {
@@ -209,19 +228,22 @@ TEST_F(DataStreamTest, HeadAndMiddleMissing) {
   stream.set_protocol(kProtocolHTTP);
   stream.AddData(std::move(req0b));
   stream.AddData(std::move(req1a));
-  PL_UNUSED(req1b);  // Missing event.
+  PX_UNUSED(req1b);  // Missing event.
   stream.AddData(std::move(req2a));
   stream.AddData(std::move(req2b));
 
   // The presence of a missing event should trigger the stream to make forward progress.
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  const auto& requests = stream.Frames<http::Message>();
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  const auto& requests = stream.Frames<http::stream_id_t, http::Message>()[0];
   ASSERT_THAT(requests, SizeIs(1));
   EXPECT_EQ(requests[0].req_path, "/bar.html");
 
-  EXPECT_EQ(req0b_size + kHTTPReq1.length(),
-            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+  EXPECT_EQ(
+      req0b_size + kHTTPReq1.length(),
+      SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
 }
 
 TEST_F(DataStreamTest, LateArrivalPlusMissingEvents) {
@@ -250,35 +272,40 @@ TEST_F(DataStreamTest, LateArrivalPlusMissingEvents) {
   DataStream stream;
   stream.set_protocol(kProtocolHTTP);
   stream.AddData(std::move(req0a));
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  ASSERT_THAT(stream.Frames<http::Message>(), IsEmpty());
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  ASSERT_THAT(frames[0], IsEmpty());
 
   // Setting buffer_expiry_timestamp to now to simulate a large delay.
   int buffer_size_limit = 10000;
   auto buffer_expiry_timestamp = now();
 
   stream.CleanupEvents(buffer_size_limit, buffer_expiry_timestamp);
-  EXPECT_TRUE(stream.Empty<http::Message>());
+  auto empty = stream.Empty<http::stream_id_t, http::Message>();
+  EXPECT_TRUE(empty);
 
   stream.AddData(std::move(req0b));
   stream.AddData(std::move(req1a));
   stream.AddData(std::move(req1b));
-  PL_UNUSED(req2a);  // Missing event.
-  PL_UNUSED(req2b);  // Missing event.
+  PX_UNUSED(req2a);  // Missing event.
+  PX_UNUSED(req2b);  // Missing event.
   stream.AddData(std::move(req3a));
   stream.AddData(std::move(req3b));
   stream.AddData(std::move(req4a));
   stream.AddData(std::move(req4b));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  const auto& requests = stream.Frames<http::Message>();
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  const auto& requests = stream.Frames<http::stream_id_t, http::Message>()[0];
   ASSERT_THAT(requests, SizeIs(3));
   EXPECT_EQ(requests[0].req_path, "/foo.html");
   EXPECT_EQ(requests[1].req_path, "/index.html");
   EXPECT_EQ(requests[2].req_path, "/foo.html");
 
-  EXPECT_EQ(kHTTPReq0.length() + kHTTPReq2.length(),
-            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+  EXPECT_EQ(
+      kHTTPReq0.length() + kHTTPReq2.length(),
+      SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
 }
 
 // This test checks that various stats updated on each call ProcessBytesToFrames()
@@ -306,20 +333,22 @@ TEST_F(DataStreamTest, Stats) {
   EXPECT_EQ(stream.stat_invalid_frames(), 0);
   EXPECT_EQ(stream.stat_valid_frames(), 0);
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_EQ(stream.Frames<http::Message>().size(), 2);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_EQ(frames[0].size(), 2);
   EXPECT_EQ(stream.stat_raw_data_gaps(), 0);
   EXPECT_EQ(stream.stat_invalid_frames(), 1);
   EXPECT_EQ(stream.stat_valid_frames(), 2);
 
   stream.AddData(std::move(req3));
-  PL_UNUSED(req4);  // Skip req4 as missing event.
+  PX_UNUSED(req4);  // Skip req4 as missing event.
   stream.AddData(std::move(req5));
   stream.AddData(std::move(req6bad));
   stream.AddData(std::move(req7));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_EQ(stream.Frames<http::Message>().size(), 5);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_EQ(frames[0].size(), 5);
   EXPECT_EQ(stream.stat_raw_data_gaps(), 1);
   EXPECT_EQ(stream.stat_invalid_frames(), 2);
   EXPECT_EQ(stream.stat_valid_frames(), 5);
@@ -375,7 +404,7 @@ TEST_F(DataStreamTest, Stress) {
     }
 
     // Process the events. Here we are looking for any DCHECKS that may fire.
-    stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
+    stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
   }
 }
 
@@ -384,15 +413,18 @@ TEST_F(DataStreamTest, CannotSwitchType) {
   DataStream stream;
   stream.set_protocol(kProtocolHTTP);
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &http_state);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest,
+                                                                &http_state);
 
 #if DCHECK_IS_ON()
   protocols::mysql::StateWrapper mysql_state{};
-  EXPECT_DEATH(stream.ProcessBytesToFrames<mysql::Packet>(message_type_t::kRequest, &mysql_state),
+  EXPECT_DEATH((stream.ProcessBytesToFrames<mysql::connection_id_t, mysql::Packet>(
+                   message_type_t::kRequest, &mysql_state)),
                "ConnTracker cannot change the type it holds during runtime");
 #else
   protocols::mysql::StateWrapper mysql_state{};
-  EXPECT_THROW(stream.ProcessBytesToFrames<mysql::Packet>(message_type_t::kRequest, &mysql_state),
+  EXPECT_THROW((stream.ProcessBytesToFrames<mysql::connection_id_t, mysql::Packet>(
+                   message_type_t::kRequest, &mysql_state)),
                std::exception);
 #endif
 }
@@ -414,15 +446,52 @@ TEST_F(DataStreamTest, SpikeCapacityWithLargeDataChunk) {
   stream.AddData(std::move(resp2));
 
   protocols::http::StateWrapper state{};
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kResponse, &state);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kResponse, &state);
   stream.CleanupEvents(retention_capacity_bytes, buffer_expiry_timestamp);
-  EXPECT_THAT(stream.Frames<http::Message>(), SizeIs(2));
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], SizeIs(2));
   EXPECT_EQ(stream.data_buffer().size(), 16);
 
   // Run ProcessBytesToFrames again to propagate data loss stats.
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kResponse, &state);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kResponse, &state);
+  EXPECT_EQ(
+      kHTTPIncompleteResp.length() - retention_capacity_bytes,
+      SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
+  EXPECT_EQ(0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                   .data_loss_bytes.Value());
+}
+
+TEST_F(DataStreamTest, SpikeCapacityWithLargeDataChunkAndSSLEnabled) {
+  int spike_capacity_bytes = 1024;
+  int retention_capacity_bytes = 16;
+  auto buffer_expiry_timestamp = now() - std::chrono::seconds(10000);
+  DataStream stream(spike_capacity_bytes);
+  stream.set_ssl_source(kSSLUnspecified);
+  stream.set_protocol(kProtocolHTTP);
+
+  std::unique_ptr<SocketDataEvent> resp0 = event_gen_.InitRecvEvent<kProtocolHTTP>(kHTTPResp0);
+  std::unique_ptr<SocketDataEvent> resp1 = event_gen_.InitRecvEvent<kProtocolHTTP>(kHTTPResp0);
+  std::unique_ptr<SocketDataEvent> resp2 =
+      event_gen_.InitRecvEvent<kProtocolHTTP>(kHTTPIncompleteResp);
+
+  stream.AddData(std::move(resp0));
+  stream.AddData(std::move(resp1));
+  stream.AddData(std::move(resp2));
+
+  protocols::http::StateWrapper state{};
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kResponse, &state);
+  stream.CleanupEvents(retention_capacity_bytes, buffer_expiry_timestamp);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], SizeIs(2));
+  EXPECT_EQ(stream.data_buffer().size(), 16);
+
+  // Run ProcessBytesToFrames again to propagate data loss stats.
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kResponse, &state);
   EXPECT_EQ(kHTTPIncompleteResp.length() - retention_capacity_bytes,
-            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP).data_loss_bytes.Value());
+            SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLUnspecified)
+                .data_loss_bytes.Value());
+  EXPECT_EQ(
+      0, SocketTracerMetrics::GetProtocolMetrics(kProtocolHTTP, kSSLNone).data_loss_bytes.Value());
 }
 
 TEST_F(DataStreamTest, ResyncCausesDuplicateEventBug) {
@@ -443,8 +512,9 @@ TEST_F(DataStreamTest, ResyncCausesDuplicateEventBug) {
   stream.set_current_time(now());
   stream.AddData(std::move(req0a));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
-  EXPECT_THAT(stream.Frames<http::Message>(), IsEmpty());
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
+  auto frames = stream.Frames<http::stream_id_t, http::Message>();
+  EXPECT_THAT(frames[0], IsEmpty());
 
   stream.set_current_time(now() + std::chrono::seconds(FLAGS_buffer_expiration_duration_secs));
 
@@ -454,12 +524,12 @@ TEST_F(DataStreamTest, ResyncCausesDuplicateEventBug) {
   stream.AddData(std::move(req1));
   stream.AddData(std::move(req2));
 
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
 
   stream.AddData(std::move(req3));
-  stream.ProcessBytesToFrames<http::Message>(message_type_t::kRequest, &state);
+  stream.ProcessBytesToFrames<http::stream_id_t, http::Message>(message_type_t::kRequest, &state);
 
-  const auto& requests = stream.Frames<http::Message>();
+  const auto& requests = stream.Frames<http::stream_id_t, http::Message>()[0];
   ASSERT_THAT(requests, SizeIs(3));
   EXPECT_EQ(requests[0].req_path, "/foo.html");
   EXPECT_EQ(requests[1].req_path, "/bar.html");

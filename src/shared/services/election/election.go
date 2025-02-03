@@ -89,8 +89,7 @@ func buildConfig(kubeconfig string) (*rest.Config, error) {
 // runElection manages the election.
 func (le *K8sLeaderElectionMgr) runElection(ctx context.Context, callback func(string), id string) {
 	// leader election uses the Kubernetes API by writing to a
-	// lock object, which can be a LeaseLock object (preferred),
-	// a ConfigMap, or an Endpoints (deprecated) object.
+	// lock object.
 	// Conflicting writes are detected and each client handles those actions
 	// independently.
 	config, err := buildConfig(le.kubeConfig)
@@ -99,16 +98,19 @@ func (le *K8sLeaderElectionMgr) runElection(ctx context.Context, callback func(s
 	}
 	client := clientset.NewForConfigOrDie(config)
 
-	// We use the EndpointsLock to remain compatible with older versions of K8s, rather than the LeaseLock (k8s >=v1.14) as suggested.
-	lock := &resourcelock.EndpointsLock{
-		EndpointsMeta: metav1.ObjectMeta{
-			Name:      le.name,
-			Namespace: le.namespace,
-		},
-		Client: client.CoreV1(),
-		LockConfig: resourcelock.ResourceLockConfig{
-			Identity: id,
-		},
+	obj := metav1.ObjectMeta{
+		Name:      le.name,
+		Namespace: le.namespace,
+	}
+
+	lockConfig := resourcelock.ResourceLockConfig{
+		Identity: id,
+	}
+
+	lock := &resourcelock.LeaseLock{
+		LeaseMeta:  obj,
+		Client:     client.CoordinationV1(),
+		LockConfig: lockConfig,
 	}
 
 	// start the leader election code loop

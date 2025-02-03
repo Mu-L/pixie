@@ -65,6 +65,8 @@ const (
 	ClusterTypeK0s
 	// ClusterTypeK3s is a k3s cluster.
 	ClusterTypeK3s
+	// ClusterTypeOpenShift is an OpenShift cluster.
+	ClusterTypeOpenShift
 )
 
 var allowedClusterTypes = []ClusterType{
@@ -75,6 +77,8 @@ var allowedClusterTypes = []ClusterType{
 	ClusterTypeMinikubeHyperkit,
 	ClusterTypeK0s,
 	ClusterTypeK3s,
+	// ClusterTypeOpenShift is omitted because it requires an additional setup (SecurityContextConstraints install).
+	// This prompts the user to install the SCC instead of blindly failing.
 }
 
 // detectClusterType gets the cluster type of the cluster for the current kube config context.
@@ -153,6 +157,12 @@ func detectClusterType() ClusterType {
 		}
 	}
 
+	// Check if it is an OpenShift cluster
+	err = exec.Command("/bin/sh", "-c", "oc status").Run()
+	if err == nil {
+		return ClusterTypeOpenShift
+	}
+
 	return ClusterTypeUnknown
 }
 
@@ -209,7 +219,8 @@ var (
 		return nil
 	})
 	hasKubectlCheck = NamedCheck(fmt.Sprintf("Kubectl > %s is present", kubectlMinVersion), func() error {
-		result, err := exec.Command("kubectl", "version", "-o", "yaml").Output()
+		cmd := k8s.KubectlCmd("version", "-o", "yaml")
+		result, err := cmd.Output()
 		if err != nil {
 			return err
 		}
@@ -237,7 +248,8 @@ var (
 		return nil
 	})
 	userCanCreateNamespace = NamedCheck("User can create namespace", func() error {
-		result, err := exec.Command("kubectl", "auth", "can-i", "create", "namespace").Output()
+		cmd := k8s.KubectlCmd("auth", "can-i", "create", "namespace")
+		result, err := cmd.Output()
 		if err != nil {
 			return err
 		}
@@ -254,6 +266,10 @@ var (
 			if c == clusterType {
 				return nil
 			}
+		}
+
+		if clusterType == ClusterTypeOpenShift {
+			return errors.New("openshift cluster detected. Please note that a Security Context Constraint (SCC) is required to run Pixie. Install a SCC in the namespace designated for the Pixie install before continuing. See example on https://docs.px.dev/reference/admin/environment-configs/")
 		}
 
 		return errors.New("Cluster type is not in list of known supported cluster types. Please see: https://docs.px.dev/installing-pixie/requirements/")

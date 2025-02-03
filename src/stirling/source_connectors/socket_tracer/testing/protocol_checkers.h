@@ -19,6 +19,7 @@
 #pragma once
 
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -26,8 +27,10 @@
 
 #include "src/shared/types/column_wrapper.h"
 #include "src/stirling/source_connectors/socket_tracer/http_table.h"
+#include "src/stirling/source_connectors/socket_tracer/mongodb_table.h"
 #include "src/stirling/source_connectors/socket_tracer/mux_table.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/http/types.h"
+#include "src/stirling/source_connectors/socket_tracer/protocols/mongodb/types.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/mux/types.h"
 
 namespace px {
@@ -44,6 +47,28 @@ std::vector<TFrameType> ToRecordVector(const types::ColumnWrapperRecordBatch& rb
 template <typename TFrameType>
 std::vector<TFrameType> GetTargetRecords(const types::ColumnWrapperRecordBatch& record_batch,
                                          int32_t pid);
+
+template <typename Record, typename... Records>
+typename std::enable_if<(std::is_same<Records, Record>::value && ...), void>::type
+ContainsWithRelativeOrder(std::vector<Record> actual_records, Records... expected_records) {
+  using ::testing::Contains;
+
+  std::vector<size_t> record_indices;
+  for (const Record& record : {expected_records...}) {
+    EXPECT_THAT(actual_records, Contains(record));
+
+    // No need to check that it matches since previous assert will cover that
+    auto result = std::find(begin(actual_records), end(actual_records), record);
+    record_indices.push_back(std::distance(actual_records.begin(), result));
+  }
+
+  auto start = std::begin(record_indices);
+  auto end = std::end(record_indices);
+  auto is_sorted = std::is_sorted(start, end);
+  auto sorted_until = std::is_sorted_until(start, end);
+
+  EXPECT_TRUE(is_sorted) << "Element not in sorted order: " << actual_records[*sorted_until];
+}
 
 inline auto EqHTTPReq(const protocols::http::Message& x) {
   using ::testing::Field;
@@ -90,6 +115,44 @@ inline std::vector<std::string> GetRemoteAddrs(const types::ColumnWrapperRecordB
     addrs.push_back(rb[kHTTPRemoteAddrIdx]->Get<types::StringValue>(idx));
   }
   return addrs;
+}
+
+inline std::vector<std::string> GetLocalAddrs(const types::ColumnWrapperRecordBatch& rb,
+                                              const std::vector<size_t>& indices) {
+  std::vector<std::string> addrs;
+  for (size_t idx : indices) {
+    addrs.push_back(rb[kHTTPLocalAddrIdx]->Get<types::StringValue>(idx));
+  }
+  return addrs;
+}
+
+inline std::vector<bool> GetEncrypted(const types::ColumnWrapperRecordBatch& rb,
+                                      const int encrypted_idx, const std::vector<size_t>& indices) {
+  std::vector<bool> encrypted;
+  for (size_t idx : indices) {
+    encrypted.push_back(rb[encrypted_idx]->Get<types::BoolValue>(idx).val);
+  }
+  return encrypted;
+}
+
+inline std::vector<std::string> GetLocalAddrs(const types::ColumnWrapperRecordBatch& rb,
+                                              const int local_addr_idx,
+                                              const std::vector<size_t>& indices) {
+  std::vector<std::string> laddrs;
+  for (size_t idx : indices) {
+    laddrs.push_back(rb[local_addr_idx]->Get<types::StringValue>(idx));
+  }
+  return laddrs;
+}
+
+inline std::vector<int64_t> GetLocalPorts(const types::ColumnWrapperRecordBatch& rb,
+                                          const int local_port_idx,
+                                          const std::vector<size_t>& indices) {
+  std::vector<int64_t> ports;
+  for (size_t idx : indices) {
+    ports.push_back(rb[local_port_idx]->Get<types::Int64Value>(idx).val);
+  }
+  return ports;
 }
 
 inline std::vector<int64_t> GetRemotePorts(const types::ColumnWrapperRecordBatch& rb,

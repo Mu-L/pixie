@@ -1,5 +1,13 @@
 # Global bazelrc file, see https://docs.bazel.build/versions/master/guide.html#bazelrc.
 
+# Use strict action env to prevent leaks of env vars.
+build --incompatible_strict_action_env
+
+# Only pass through GH_API_KEY for stamped builds.
+# This is still not ideal as it still busts the cache of stamped builds.
+build:stamp --stamp
+build:stamp --action_env=GH_API_KEY
+
 # Doesn't rely on a localjdk which is default. This removes the need for a JAVA_HOME
 # on the build machine and also makes JAVA builds hermetic.
 build --java_runtime_version=remotejdk_11
@@ -7,10 +15,6 @@ test --java_runtime_version=remotejdk_11
 
 # https://github.com/bazelbuild/rules_jvm_external/issues/445
 common --repo_env=JAVA_HOME=../bazel_tools/jdk
-
-# This is to flush bazel cache for new version of clang/gcc.
-build --action_env=CLANG_COMPILER_VERSION=15.0_3
-build --host_action_env=CLANG_COMPILER_VERSION=15.0_3
 
 build --remote_download_minimal
 test --remote_download_minimal
@@ -21,11 +25,6 @@ coverage --build_runfile_links
 # Follow https://github.com/fmeum/rules_meta/issues/1#issuecomment-1255828109
 # for updates.
 common --incompatible_remove_rule_name_parameter=false
-
-build:clang --action_env=CC
-build:clang --host_action_env=CC
-build:clang --action_env=CXX
-build:clang --host_action_env=CXX
 
 # Get version information into the build.
 build --workspace_status_command=bazel/get_workspace_status.sh
@@ -56,7 +55,9 @@ build --strip=never
 # when multiple instances are running simultaneously.
 # It is also generally not a bad idea, since it improves heremeticity.
 # For more context, see: https://github.com/bazelbuild/bazel/issues/3236
-test --sandbox_tmpfs_path=/tmp
+# We can't use this for qemu because it breaks the 9p fs. Since we can't
+# remove these flags we just set them for all our configs.
+test:tmp-sandbox --sandbox_tmpfs_path=/tmp
 
 # This flag prevents rules_docker from transitioning the platform for our images.
 # Since our target platform is the same as the containers we use,
@@ -64,33 +65,63 @@ test --sandbox_tmpfs_path=/tmp
 build --@io_bazel_rules_docker//transitions:enable=false
 
 # This flag is equivalent to --config=linux on a linux machine, and --config=macos on a macos machine.
-build --enable_platform_specific_config
+common --enable_platform_specific_config
 
 # Linux specific config
+# `bazel query` will try to auto-detect the toolchain without this.
+common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 # --platforms is only set on linux, because we don't have a linux cross-compiling setup on macos.
 build:linux --platforms=//bazel/cc_toolchains:linux-x86_64
 # Likewise, we only have cc_toolchain definitions for our linux compilers, so we only enable toolchain resolution on linux.
 build:linux --incompatible_enable_cc_toolchain_resolution
 build:linux --action_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 
-# Default mac config. Same as clang except we can't statically link,
-# and mac does not use libstdc++.
-build:macos --action_env=BAZEL_LINKLIBS
-build:macos --action_env=BAZEL_LINKOPTS
+# Common options from clang.
+build:clang-base --//bazel/cc_toolchains:compiler=clang
+build:clang-base --//bazel/cc_toolchains:libc_version=glibc_host
 
-# Build for Clang:
-build:clang --//bazel/cc_toolchains:compiler=clang
-build:clang --//bazel/cc_toolchains:libc_version=gnu
+# We build our own chroot for the sysroot tests, which doesn't work well under bazel's sandbox.
+build:sysroot-base --//bazel/test_runners:test_runner=sysroot_chroot
+test:sysroot-base --strategy TestRunner=standalone
+test:sysroot-base --run_under="bazel/test_runners/sysroot_chroot/test_runner.sh"
+
+build:x86_64_sysroot --config=clang
+build:x86_64_sysroot --//bazel/cc_toolchains:libc_version=glibc2_36
+build:x86_64_sysroot --config=sysroot-base
+
+build:aarch64_sysroot --config=clang
+build:aarch64_sysroot --//bazel/cc_toolchains:libc_version=glibc2_36
+build:aarch64_sysroot --platforms=//bazel/cc_toolchains:linux-aarch64
+build:aarch64_sysroot --config=sysroot-base
+# Increase test timeouts for qemu (don't increase the slowest ones because those are already very long).
+test:aarch64_sysroot --test_timeout=180,600,1800,3600
+test:aarch64_sysroot --test_env=QEMU_STRACE
+test:aarch64_sysroot --test_tag_filters=-no_libcpp,-requires_root,-requires_bpf,-disabled,-requires_full_qemu_emulation
 
 # Build for Clang using Libc++.
-build:libc++ --define use_libcpp=1
-# TODO(zasgar): Remove this in next diff.
-build:libc++ --copt -D_LIBCPP_NO_EXPERIMENTAL_DEPRECATION_WARNING_FILESYSTEM
-build:libc++ --build_tag_filters=-no_libcpp
-build:libc++ --test_tag_filters=-no_libcpp,-requires_root,-requires_bpf,-disabled
-build:libc++ --//bazel/cc_toolchains:compiler=clang
-build:libc++ --//bazel/cc_toolchains:libc_version=gnu
-build:libc++ --features=libc++ --features=-libstdc++
+build:clang --config=clang-base
+build:clang --//bazel:enable_libcpp
+build:clang --features=libc++ --features=-libstdc++
+build:clang --build_tag_filters=-no_libcpp
+build:clang --test_tag_filters=-no_libcpp,-requires_root,-requires_bpf,-disabled
+test:clang --config=tmp-sandbox
+
+# Build for Clang with libstdc++:
+build:clang-libstdc++ --config=clang-base
+build:clang-libstdc++ --//bazel/cc_toolchains:compiler=clang
+build:clang-libstdc++ --//bazel/cc_toolchains:libc_version=gnu
+test:clang-libstdc++ --config=tmp-sandbox
+
+build:qemu-bpf --config=clang-base
+build:qemu-bpf --//bazel:enable_libcpp
+build:qemu-bpf --features=libc++ --features=-libstdc++
+build:qemu-bpf --build_tag_filters=requires_bpf,requires_root,-no_qemu,-no_libcpp
+build:qemu-bpf --test_tag_filters=requires_bpf,requires_root,-no_qemu,-no_libcpp,-disabled
+build:qemu-bpf --sandbox_fake_username
+build:qemu-bpf --//bazel/cc_toolchains:libc_version=glibc2_36
+build:qemu-bpf --//bazel/test_runners:test_runner=qemu_with_kernel
+build:qemu-bpf --run_under="bazel/test_runners/qemu_with_kernel/test_runner.sh"
+test:qemu-bpf --test_timeout=180,600,1800,3600
 
 # Build for GCC.
 # These are copts because they apply to both c++ and c files.
@@ -99,14 +130,17 @@ build:libc++ --features=libc++ --features=-libstdc++
 build:gcc --copt -Wno-error=sign-compare
 build:gcc --copt -Wno-error=stringop-truncation
 build:gcc --copt -Wno-error=maybe-uninitialized
-build:gcc --build_tag_filters=-no_gcc
-build:gcc --test_tag_filters=-no_gcc,-requires_root,-requires_bpf,-disabled
+build:gcc --build_tag_filters=-no_gcc,-qemu_interactive
+build:gcc --test_tag_filters=-no_gcc,-requires_root,-requires_bpf,-disabled,-qemu_interactive
 build:gcc --//bazel/cc_toolchains:compiler=gcc
-build:gcc --//bazel/cc_toolchains:libc_version=gnu
+# TODO(#1462): Investigate why tcmalloc breaks linking of go binaries.
+build:gcc --define tcmalloc=disabled
+test:gcc --config=tmp-sandbox
 
 
 # bazel build --config asan ...
 build:asan --config=clang
+build:asan --//bazel:sanitizer=asan
 build:asan --features=asan
 build:asan --test_timeout="120,600,1800,3600"
 build:asan --define PL_CONFIG_ASAN=1
@@ -118,9 +152,12 @@ build:asan --test_env=ASAN_SYMBOLIZER_PATH
 build:asan --test_env=ASAN_OPTIONS=handle_abort=1:allow_addr2line=true
 build:asan --test_env=UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
 build:asan --define tcmalloc=disabled
+#test:asan --test_env=ASAN_OPTIONS=detect_container_overflow=0
 
 # bazel build --config msan
+build:msan --config=clang
 build:msan --define PL_CONFIG_MSAN=1
+build:msan --//bazel:sanitizer=msan
 build:msan --define tcmalloc=disabled
 build:msan --build_tag_filters=-no_msan
 build:msan --test_tag_filters=-no_msan,-requires_root,-requires_bpf,-disabled
@@ -128,6 +165,7 @@ build:msan --features=msan
 
 # bazel build --config tsan
 build:tsan --config=clang
+build:tsan --//bazel:sanitizer=tsan
 build:tsan --define PL_CONFIG_TSAN=1
 build:tsan --define tcmalloc=disabled
 build:tsan --build_tag_filters=-no_tsan
@@ -137,6 +175,7 @@ build:tsan --define tcmalloc=disabled
 # https://github.com/google/sanitizers/issues/953
 build:tsan --test_env=TSAN_OPTIONS=report_atomic_races=0
 build:tsan --features=tsan
+test:tsan --test_timeout=180,600,1800,3600
 
 # Note that we are lumping tests that require root into the BPF tests below
 # to minimize number of configs.
@@ -187,24 +226,21 @@ coverage --instrument_test_targets
 coverage --define PL_COVERAGE=true
 coverage --copt -DPL_COVERAGE
 coverage --test_tag_filters=-requires_root,-requires_bpf,-no_coverage,-disabled,-no_gcc
+coverage --action_env=COVERAGE_GCOV_OPTIONS=-b
 
-# Use stable GIT build tag by default.
-build --define BUNDLE_VERSION={STABLE_BUILD_TAG}
 
-# pre-define as empty so that build all works. This might be overridden for dev vizier builds.
-build --define DEV_VIZIER_IMAGE_PREFIX=""
-
+try-import %workspace%/bes.bazelrc
 # jenkins.bazelrc is copied from ci/jenkins.bazelrc by Jenkins workers during the build.
 # The intention is to avoid polluting configurations of bazel for developers.
 try-import %workspace%/jenkins.bazelrc
-
-# Put your own configurations into user.bazelrc, which is ignored by git.
-try-import %workspace%/user.bazelrc
+# github.bazelrc is copied from ci/github/bazelrc by the github action workers during the build.
+try-import %workspace%/github.bazelrc
 
 # Import a machine specific bazelrc. This can be used to enable caching.
 try-import /etc/bazelrc
 
-try-import %workspace%/bes.bazelrc
+# Put your own configurations into user.bazelrc, which is ignored by git.
+try-import %workspace%/user.bazelrc
 
 # Tensorflow requires this option
 common --experimental_repo_remote_exec
@@ -214,3 +250,22 @@ test --flaky_test_attempts=//src/stirling/source_connectors/socket_tracer/.*bpf_
 
 # Disable XNNPACK for tensorflow lite. There's currently an ASAN issue with XNNPACK, so disable for now.
 build --define=tflite_with_xnnpack=false
+
+build:remote --remote_executor=grpcs://remote.buildbuddy.io
+build:remote --host_platform=//bazel:remote_exec_platform
+build:remote --extra_execution_platforms=//bazel:remote_exec_platform
+build:remote --bes_results_url=https://app.buildbuddy.io/invocation/
+build:remote --bes_backend=grpcs://remote.buildbuddy.io
+build:remote --remote_cache=grpcs://remote.buildbuddy.io
+build:remote --experimental_remote_downloader=grpcs://remote.buildbuddy.io
+build:remote --remote_timeout=1h
+build:remote --remote_retries=5
+build:remote --spawn_strategy=remote,local
+build:remote --experimental_remote_cache_compression
+build:remote --jobs=100
+test:remote --jobs=100
+build:remote --nolegacy_important_outputs
+build:remote --build_metadata=VISIBILITY=PUBLIC
+coverage:remote --strategy=CoverageReport=local,remote
+coverage:remote --experimental_fetch_all_coverage_outputs
+coverage:remote --experimental_split_coverage_postprocessing

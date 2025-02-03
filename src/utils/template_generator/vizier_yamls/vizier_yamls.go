@@ -23,8 +23,6 @@ import (
 	"os"
 	"strings"
 
-	"k8s.io/client-go/kubernetes"
-
 	"px.dev/pixie/src/utils/shared/tar"
 	"px.dev/pixie/src/utils/shared/yamls"
 )
@@ -66,6 +64,7 @@ type VizierTmplValues struct {
 	ElectionPeriodMs          int64
 	CustomPEMFlags            map[string]string
 	Registry                  string
+	UseBetaPdbVersion         bool
 }
 
 // VizierTmplValuesToArgs converts the vizier template values to args which can be used to fill out a template.
@@ -91,6 +90,7 @@ func VizierTmplValuesToArgs(tmplValues *VizierTmplValues) *yamls.YAMLTmplArgumen
 			"electionPeriodMs":          tmplValues.ElectionPeriodMs,
 			"customPEMFlags":            tmplValues.CustomPEMFlags,
 			"registry":                  tmplValues.Registry,
+			"useBetaPdbVersion":         tmplValues.UseBetaPdbVersion,
 		},
 		Release: &map[string]interface{}{
 			"Namespace": tmplValues.Namespace,
@@ -158,7 +158,7 @@ var GlobalTemplateOptions = []*yamls.K8sTemplateOptions{
 }
 
 // GenerateTemplatedDeployYAMLsWithTar generates the YAMLs that should be run when deploying Pixie using the provided tar file.
-func GenerateTemplatedDeployYAMLsWithTar(clientset *kubernetes.Clientset, tarPath string, versionStr string) ([]*yamls.YAMLFile, error) {
+func GenerateTemplatedDeployYAMLsWithTar(tarPath string, versionStr string) ([]*yamls.YAMLFile, error) {
 	file, err := os.Open(tarPath)
 	if err != nil {
 		return nil, err
@@ -169,22 +169,22 @@ func GenerateTemplatedDeployYAMLsWithTar(clientset *kubernetes.Clientset, tarPat
 		return nil, err
 	}
 
-	return GenerateTemplatedDeployYAMLs(clientset, yamlMap, versionStr)
+	return GenerateTemplatedDeployYAMLs(yamlMap, versionStr)
 }
 
 // GenerateTemplatedDeployYAMLs generates the YAMLs that should be run when deploying Pixie using the provided YAML map.
-func GenerateTemplatedDeployYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string, versionStr string) ([]*yamls.YAMLFile, error) {
-	secretsYAML, err := GenerateSecretsYAML(clientset, versionStr)
+func GenerateTemplatedDeployYAMLs(yamlMap map[string]string, versionStr string) ([]*yamls.YAMLFile, error) {
+	secretsYAML, err := GenerateSecretsYAML(versionStr)
 	if err != nil {
 		return nil, err
 	}
 
-	natsYAML, etcdYAML, err := generateVzDepsYAMLs(clientset, yamlMap)
+	natsYAML, etcdYAML, err := generateVzDepsYAMLs(yamlMap)
 	if err != nil {
 		return nil, err
 	}
 
-	vzYAMLs, err := generateVzYAMLs(clientset, yamlMap)
+	vzYAMLs, err := generateVzYAMLs(yamlMap)
 	if err != nil {
 		return nil, err
 	}
@@ -206,13 +206,13 @@ func GenerateTemplatedDeployYAMLs(clientset *kubernetes.Clientset, yamlMap map[s
 }
 
 // GenerateSecretsYAML creates the YAML for Pixie secrets.
-func GenerateSecretsYAML(clientset *kubernetes.Clientset, versionStr string) (string, error) {
+func GenerateSecretsYAML(versionStr string) (string, error) {
 	dockerYAML := ""
 
 	origYAML := yamls.ConcatYAMLs(dockerYAML, secretsYAML)
 
 	// Fill in configmaps.
-	secretsYAML, err := yamls.TemplatizeK8sYAML(clientset, origYAML, append([]*yamls.K8sTemplateOptions{
+	secretsYAML, err := yamls.TemplatizeK8sYAML(origYAML, append([]*yamls.K8sTemplateOptions{
 		{
 			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-deploy-secrets"),
 			Patch:           `{"stringData": { "deploy-key": "__PL_DEPLOY_KEY__"} }`,
@@ -306,8 +306,8 @@ func patchContainerEnvIfValueExists(containerName string, envName string, valueN
 	}
 }
 
-func generateVzDepsYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string) (string, string, error) {
-	natsYAML, err := yamls.TemplatizeK8sYAML(clientset, yamlMap[natsYAMLPath], append(GlobalTemplateOptions, []*yamls.K8sTemplateOptions{
+func generateVzDepsYAMLs(yamlMap map[string]string) (string, string, error) {
+	natsYAML, err := yamls.TemplatizeK8sYAML(yamlMap[natsYAMLPath], append(GlobalTemplateOptions, []*yamls.K8sTemplateOptions{
 		{
 			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl:nats-server-cluster-binding"),
 			Patch:           `{ "subjects": [{ "name": "nats-server", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
@@ -319,7 +319,14 @@ func generateVzDepsYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]str
 		return "", "", err
 	}
 
-	etcdYAML, err := yamls.TemplatizeK8sYAML(clientset, yamlMap[etcdYAMLPath], GlobalTemplateOptions)
+	etcdYAML, err := yamls.TemplatizeK8sYAML(yamlMap[etcdYAMLPath], append(GlobalTemplateOptions, []*yamls.K8sTemplateOptions{
+		{
+			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-etcd-pdb"),
+			Patch:           `{"apiVersion" : "__PX_PDB_API_VERSION__"}`,
+			Placeholder:     "__PX_PDB_API_VERSION__",
+			TemplateValue:   `{{ if .Values.useBetaPdbVersion }}"policy/v1beta1"{{ else }}"policy/v1"{{ end }}`,
+		},
+	}...))
 	if err != nil {
 		return "", "", err
 	}
@@ -333,7 +340,7 @@ func generateVzDepsYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]str
 	return natsYAML, wrappedEtcd, nil
 }
 
-func generateVzYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string) ([]*yamls.YAMLFile, error) {
+func generateVzYAMLs(yamlMap map[string]string) ([]*yamls.YAMLFile, error) {
 	if _, ok := yamlMap[vizierMetadataPersistYAMLPath]; !ok {
 		return nil, fmt.Errorf("Cannot generate YAMLS for specified Vizier version. Please update to latest Vizier version instead.  ")
 	}
@@ -358,6 +365,12 @@ func generateVzYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string)
 			TemplateValue:   fmt.Sprintf(".%s.svc", nsTmpl),
 		},
 		{
+			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-cert-provisioner-binding"),
+			Patch:           `{ "subjects": [{ "name": "pl-cert-provisioner-service-account", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
+			Placeholder:     "__PX_SUBJECT_NAMESPACE__",
+			TemplateValue:   nsTmpl,
+		},
+		{
 			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-updater-binding"),
 			Patch:           `{ "subjects": [{ "name": "pl-updater-service-account", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
 			Placeholder:     "__PX_SUBJECT_NAMESPACE__",
@@ -365,7 +378,7 @@ func generateVzYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string)
 		},
 		{
 			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-updater-cluster-binding"),
-			Patch:           `{ "subjects": [{ "name": "pl-updater-service-account", "namespace": "__PXqgq_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
+			Patch:           `{ "subjects": [{ "name": "pl-updater-service-account", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
 			Placeholder:     "__PX_SUBJECT_NAMESPACE__",
 			TemplateValue:   nsTmpl,
 		},
@@ -402,6 +415,18 @@ func generateVzYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string)
 		{
 			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-vizier-crd-binding"),
 			Patch:           `{ "subjects": [{ "name": "default", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
+			Placeholder:     "__PX_SUBJECT_NAMESPACE__",
+			TemplateValue:   nsTmpl,
+		},
+		{
+			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-vizier-query-broker-crd-binding"),
+			Patch:           `{ "subjects": [{ "name": "query-broker-service-account", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
+			Placeholder:     "__PX_SUBJECT_NAMESPACE__",
+			TemplateValue:   nsTmpl,
+		},
+		{
+			TemplateMatcher: yamls.GenerateResourceNameMatcherFn("pl-vizier-query-broker-binding"),
+			Patch:           `{ "subjects": [{ "name": "query-broker-service-account", "namespace": "__PX_SUBJECT_NAMESPACE__", "kind": "ServiceAccount" }] }`,
 			Placeholder:     "__PX_SUBJECT_NAMESPACE__",
 			TemplateValue:   nsTmpl,
 		},
@@ -455,39 +480,48 @@ func generateVzYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string)
 		},
 	}...)
 
-	persistentYAML, err := yamls.TemplatizeK8sYAML(clientset, yamlMap[vizierMetadataPersistYAMLPath], tmplOptions)
+	persistentYAML, err := yamls.TemplatizeK8sYAML(yamlMap[vizierMetadataPersistYAMLPath], tmplOptions)
 
 	if err != nil {
 		return nil, err
 	}
 	// The persistent YAML should only be applied if --use_etcd_operator is false. The entire YAML should be wrapped in a template.
 	wrappedPersistent := fmt.Sprintf(
-		`{{if not .Values.useEtcdOperator}}
+		`{{if and (not .Values.autopilot) (not .Values.useEtcdOperator)}}
 %s
 {{- end}}`,
 		persistentYAML)
 
-	etcdYAML, err := yamls.TemplatizeK8sYAML(clientset, yamlMap[vizierEtcdYAMLPath], tmplOptions)
+	etcdYAML, err := yamls.TemplatizeK8sYAML(yamlMap[vizierEtcdYAMLPath], tmplOptions)
 	if err != nil {
 		return nil, err
 	}
 	// The etcd version of Vizier should only be applied if --use_etcd_operator is true. The entire YAML should be wrapped in a template.
 	wrappedEtcd := fmt.Sprintf(
-		`{{if .Values.useEtcdOperator}}
+		`{{if and (not .Values.autopilot) .Values.useEtcdOperator}}
 %s
 {{- end}}`,
 		etcdYAML)
 
-	persistentAutopilotYAML, err := yamls.TemplatizeK8sYAML(clientset, yamlMap[vizierMetadataPersistAutopilotYAMLPath], tmplOptions)
-
+	persistentAutopilotYAML, err := yamls.TemplatizeK8sYAML(yamlMap[vizierMetadataPersistAutopilotYAMLPath], tmplOptions)
 	if err != nil {
 		return nil, err
 	}
+	wrappedPersistentAP := fmt.Sprintf(
+		`{{if and (.Values.autopilot) (not .Values.useEtcdOperator)}}
+%s
+{{- end}}`,
+		persistentAutopilotYAML)
 
-	etcdAutopilotYAML, err := yamls.TemplatizeK8sYAML(clientset, yamlMap[vizierEtcdAutopilotYAMLPath], tmplOptions)
+	etcdAutopilotYAML, err := yamls.TemplatizeK8sYAML(yamlMap[vizierEtcdAutopilotYAMLPath], tmplOptions)
 	if err != nil {
 		return nil, err
 	}
+	wrappedEtcdAP := fmt.Sprintf(
+		`{{if and (.Values.autopilot) (.Values.useEtcdOperator)}}
+%s
+{{- end}}`,
+		etcdAutopilotYAML)
 
 	return []*yamls.YAMLFile{
 		{
@@ -500,11 +534,11 @@ func generateVzYAMLs(clientset *kubernetes.Clientset, yamlMap map[string]string)
 		},
 		{
 			Name: "vizier_etcd_ap",
-			YAML: etcdAutopilotYAML,
+			YAML: wrappedEtcdAP,
 		},
 		{
 			Name: "vizier_persistent_ap",
-			YAML: persistentAutopilotYAML,
+			YAML: wrappedPersistentAP,
 		},
 	}, nil
 }

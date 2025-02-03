@@ -17,7 +17,7 @@ spec:
       containers:
       - name: artifact-tracker-server
         imagePullPolicy: IfNotPresent
-        image: gcr.io/pixie-oss/pixie-dev/cloud/artifact_tracker_server_image
+        image: cloud-artifact_tracker_server_image
         ports:
         - containerPort: 50750
           name: http2
@@ -70,6 +70,20 @@ spec:
         - name: artifact-access-sa
           mountPath: /creds
           readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10100
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
       - name: certs
         secret:

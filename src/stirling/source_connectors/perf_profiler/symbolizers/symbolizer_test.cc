@@ -92,16 +92,15 @@ TEST_F(BCCSymbolizerTest, KernelSymbols) {
   EXPECT_EQ(std::string(symbolize(kaddr)), kSymbolName);
 }
 
-// TODO(jps): Fix and re-enable test.
 // This test uses a "fake" Java binary that creates a pre-populated (canned) symbol file.
 // Because the fake Java process is named "java" the process is categorized as Java.
 // The symbolizer finds the pre-existing symbol file, and early exits the attach process.
 // This test expects to find known symbols at known addresses based on the canned symbol file.
-TEST_F(BCCSymbolizerTest, DISABLED_DISABLED_JavaSymbols) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
-  PL_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
+TEST_F(BCCSymbolizerTest, JavaSymbols) {
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
+  PX_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Symbolizer> symbolizer,
                        JavaSymbolizer::Create(std::move(symbolizer_)));
 
@@ -117,7 +116,7 @@ TEST_F(BCCSymbolizerTest, DISABLED_DISABLED_JavaSymbols) {
 
   symbolizer->IterationPreTick();
   symbolizer->GetSymbolizerFn(child_upid);
-  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  std::this_thread::sleep_for(std::chrono::milliseconds{500});
 
   ASSERT_TRUE(symbolizer->Uncacheable(child_upid)) << "Should have found symbol file by now.";
   auto symbolize = symbolizer->GetSymbolizerFn(child_upid);
@@ -155,16 +154,22 @@ TEST_F(BCCSymbolizerTest, DISABLED_DISABLED_JavaSymbols) {
 
 // Expect that Java symbolization agents will not be injected after disabling.
 TEST_F(BCCSymbolizerTest, DisableJavaSymbols) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
-  PL_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
+  if (std::getenv("TESTING_UNDER_QEMU") != nullptr) {
+    // TODO(pixie-io/stirling): This test fails under qemu, likely due to timing issues.
+    // We should remove the sleep(s) and instead wait for certain conditions to occur
+    // (with appropriate timeouts)s.
+    GTEST_SKIP() << "Skipping this test under qemu";
+  }
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
+  PX_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Symbolizer> symbolizer,
                        JavaSymbolizer::Create(std::move(symbolizer_)));
 
   const std::filesystem::path java_app_path =
-      BazelRunfilePath("src/stirling/source_connectors/perf_profiler/testing/java/fib");
+      BazelRunfilePath("src/stirling/source_connectors/perf_profiler/testing/java/profiler_test");
   ASSERT_TRUE(fs::Exists(java_app_path)) << java_app_path.string();
   ASSERT_TRUE(fs::Exists(FLAGS_stirling_profiler_px_jattach_path))
       << FLAGS_stirling_profiler_px_jattach_path;
@@ -212,19 +217,16 @@ TEST_F(BCCSymbolizerTest, DisableJavaSymbols) {
   EXPECT_FALSE(JavaProfilingProcTracker::GetSingleton()->upids().contains(child_upid_1));
 }
 
-// TODO(jps): Fix and re-enable test.
 // Java symbolizer does not attach if not enough space is available.
-TEST_F(BCCSymbolizerTest, DISABLED_JavaNotEnoughSpaceAvailable) {
-  // Sets the tmpfs size, for the tmpfs volume that we will mount to /tmp in the target container.
-  // This size is too small for our Java symbolization libraries.
-  char const* const tmpfs_size_arg = "size=500K";
-
+// The tmpfs used for a /tmp volume mount (below, where the docker volume is created)
+// is sized too small for our agent libs.
+TEST_F(BCCSymbolizerTest, JavaNotEnoughSpaceAvailable) {
   // Populate locally scoped flags values that setup the test environment.
   // Agent libs & px_jattach need to be found inside of the bazel env., populated via helper fns.
   // We also ensure that Java symbolization is enabled.
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
 
   // Create a Java symbolizer.
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Symbolizer> symbolizer,
@@ -236,35 +238,18 @@ TEST_F(BCCSymbolizerTest, DISABLED_JavaNotEnoughSpaceAvailable) {
       << FLAGS_stirling_profiler_px_jattach_path;
   ASSERT_TRUE(fs::Exists(FLAGS_java_image_name)) << FLAGS_java_image_name;
 
-  // Setup a tmpfs and mount it at /tmp/tmpfs-symbolizer-test-pid-<pid>.
-  // The tmpfs is sized according to "tmpfs_size_arg".
-  using fs_path = std::filesystem::path;
-  const pid_t pid = getpid();
-  const fs_path tmp_path = fs::TempDirectoryPath();
-  const fs_path sub_path = absl::Substitute("tmpfs-symbolizer-test-pid-$0", pid);
-  const fs_path tmpfs_path = fs::JoinPath({&tmp_path, &sub_path});
-  ASSERT_OK(fs::CreateDirectories(tmpfs_path));
-  LOG(INFO) << absl::Substitute("Mounting tmpfs $0 at $1.", tmpfs_size_arg, tmpfs_path.string());
-
-  // Mount a tmpfs at our freshly minted empty path.
-  ASSERT_EQ(0, mount("none", tmpfs_path.string().c_str(), "tmpfs", 0, tmpfs_size_arg));
-
-  // Cleanup steps are unmount and rmdir. To do this, we defer the actions.
-  // Note, the defer'd actions execute in reverse order.
-  DEFER(ASSERT_OK(fs::Remove(tmpfs_path)));
-  DEFER(umount(tmpfs_path.string().c_str()));
-
   // Instantiate a ContainerRunner for our containerized test app.
   static constexpr std::string_view kReadyMsg = "";
   const std::filesystem::path image_tar_path(FLAGS_java_image_name);
   static constexpr std::string_view container_name_pfx = "java";
   ContainerRunner sub_process(image_tar_path, container_name_pfx, kReadyMsg);
 
-  // Start the container/sub-proc. Use "-v" arg. to mount our tmpfs into /tmp in that container.
-  const std::string tmpfs_mount_opt = absl::Substitute("$0:/tmp", tmpfs_path.string());
+  // Start the container/sub-proc. Use "--mount" arg to mount a tmpfs on /tmp with a certain size.
   static constexpr auto timeout = std::chrono::seconds{600};
   static constexpr bool kUseHostPidNamespace = false;
-  const std::vector<std::string> options = {"-v", tmpfs_mount_opt};
+  const std::string tmpfs_size = "500K";
+  const std::vector<std::string> options = {
+      "--mount", absl::Substitute("type=tmpfs,tmpfs-size=$0,destination=/tmp", tmpfs_size)};
   const std::vector<std::string> args;
   sub_process.Run(timeout, options, args, kUseHostPidNamespace);
 
@@ -277,7 +262,7 @@ TEST_F(BCCSymbolizerTest, DISABLED_JavaNotEnoughSpaceAvailable) {
   // of attach events allowed "per iteration" based on FLAGS_number_attach_attempts_per_iteration.
   // A freshly minted symbolizer starts with its budget set to zero. We do this here so that
   // the symbolizer can attempt (as many times as needed) a JVMTI symbolization agent attach.
-  PL_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
+  PX_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
   symbolizer->IterationPreTick();
 
   // Requesting the symbolization function kicks off the attach process, i.e. because the symbolizer
@@ -295,19 +280,17 @@ TEST_F(BCCSymbolizerTest, DISABLED_JavaNotEnoughSpaceAvailable) {
   ASSERT_FALSE(symbolizer->Uncacheable(child_upid)) << "Symbolizer should fail to attach.";
 }
 
-// Show that test JavaNotEnoughSpaceAvailable passes specifically because
-// it was setup with not enough space available.
+// This is the same test as "JavaNotEnoughSpaceAvailable" but setup with enough tmpfs capacity
+// for the Java agent libs. Running this test increases confidence that the reason
+// "JavaNotEnoughSpaceAvailable" passes (if it passes) is because the Java symbolizer did
+// not come up specifically because of the small tmpfs and not for some other unrelated reason.
 TEST_F(BCCSymbolizerTest, JavaEnoughSpaceAvailable) {
-  // Sets the tmpfs size, for the tmpfs volume that we will mount to /tmp in the target container.
-  // This size is enough for our Java symbolization libraries.
-  char const* const tmpfs_size_arg = "size=20M";
-
   // Populate locally scoped flags values that setup the test environment.
   // Agent libs & px_jattach need to be found inside of the bazel env., populated via helper fns.
   // We also ensure that Java symbolization is enabled.
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
 
   // Create a Java symbolizer.
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Symbolizer> symbolizer,
@@ -319,35 +302,18 @@ TEST_F(BCCSymbolizerTest, JavaEnoughSpaceAvailable) {
       << FLAGS_stirling_profiler_px_jattach_path;
   ASSERT_TRUE(fs::Exists(FLAGS_java_image_name)) << FLAGS_java_image_name;
 
-  // Setup a tmpfs and mount it at /tmp/tmpfs-symbolizer-test-pid-<pid>.
-  // The tmpfs is sized according to "tmpfs_size_arg".
-  using fs_path = std::filesystem::path;
-  const pid_t pid = getpid();
-  const fs_path tmp_path = fs::TempDirectoryPath();
-  const fs_path sub_path = absl::Substitute("tmpfs-symbolizer-test-pid-$0", pid);
-  const fs_path tmpfs_path = fs::JoinPath({&tmp_path, &sub_path});
-  ASSERT_OK(fs::CreateDirectories(tmpfs_path));
-  LOG(INFO) << absl::Substitute("Mounting tmpfs $0 at $1.", tmpfs_size_arg, tmpfs_path.string());
-
-  // Mount a tmpfs at our freshly minted empty path.
-  ASSERT_EQ(0, mount("none", tmpfs_path.string().c_str(), "tmpfs", 0, tmpfs_size_arg));
-
-  // Cleanup steps are unmount and rmdir. To do this, we defer the actions.
-  // Note, the defer'd actions execute in reverse order.
-  DEFER(ASSERT_OK(fs::Remove(tmpfs_path)));
-  DEFER(umount(tmpfs_path.string().c_str()));
-
   // Instantiate a ContainerRunner for our containerized test app.
   static constexpr std::string_view kReadyMsg = "";
   const std::filesystem::path image_tar_path(FLAGS_java_image_name);
   static constexpr std::string_view container_name_pfx = "java";
   ContainerRunner sub_process(image_tar_path, container_name_pfx, kReadyMsg);
 
-  // Start the container/sub-proc. Use "-v" arg. to mount our tmpfs into /tmp in that container.
-  const std::string tmpfs_mount_opt = absl::Substitute("$0:/tmp", tmpfs_path.string());
+  // Start the container/sub-proc.
   static constexpr auto timeout = std::chrono::seconds{600};
   static constexpr bool kUseHostPidNamespace = false;
-  const std::vector<std::string> options = {"-v", tmpfs_mount_opt};
+  const std::string tmpfs_size = "20M";
+  const std::vector<std::string> options = {
+      "--mount", absl::Substitute("type=tmpfs,tmpfs-size=$0,destination=/tmp", tmpfs_size)};
   const std::vector<std::string> args;
   sub_process.Run(timeout, options, args, kUseHostPidNamespace);
 
@@ -360,7 +326,7 @@ TEST_F(BCCSymbolizerTest, JavaEnoughSpaceAvailable) {
   // of attach events allowed "per iteration" based on FLAGS_number_attach_attempts_per_iteration.
   // A freshly minted symbolizer starts with its budget set to zero. We do this here so that
   // the symbolizer can attempt (as many times as needed) a JVMTI symbolization agent attach.
-  PL_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
+  PX_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
   symbolizer->IterationPreTick();
 
   // Requesting the symbolization function kicks off the attach process, i.e. because the symbolizer
@@ -512,10 +478,10 @@ TEST_F(BCCSymbolizerTest, Caching) {
 
 // Expect that upids for Java processes (that we attempt to symbolize) are inserted to global set.
 TEST_F(BCCSymbolizerTest, JavaProcessBeingTracked) {
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
-  PL_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
-  PL_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_agent_libs, GetAgentLibsFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_px_jattach_path, GetPxJattachFlagValueForTesting());
+  PX_SET_FOR_SCOPE(FLAGS_stirling_profiler_java_symbols, true);
+  PX_SET_FOR_SCOPE(FLAGS_number_attach_attempts_per_iteration, 10000);
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Symbolizer> symbolizer,
                        JavaSymbolizer::Create(std::move(symbolizer_)));
 

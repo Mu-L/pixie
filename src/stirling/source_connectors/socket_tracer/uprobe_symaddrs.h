@@ -24,6 +24,7 @@
 #include "src/stirling/obj_tools/dwarf_reader.h"
 #include "src/stirling/obj_tools/elf_reader.h"
 #include "src/stirling/obj_tools/raw_fptr_manager.h"
+#include "src/stirling/source_connectors/socket_tracer/bcc_bpf_intf/common.h"
 #include "src/stirling/source_connectors/socket_tracer/bcc_bpf_intf/symaddrs.h"
 #include "src/stirling/utils/detect_application.h"
 
@@ -71,6 +72,10 @@ StatusOr<struct openssl_symaddrs_t> OpenSSLSymAddrs(obj_tools::RawFptrManager* f
  */
 StatusOr<struct node_tlswrap_symaddrs_t> NodeTLSWrapSymAddrs(const std::filesystem::path& node_exe,
                                                              const SemVer& ver);
+
+px::Status PopulateGoTLSDebugSymbols(obj_tools::ElfReader* elf_reader,
+                                     obj_tools::DwarfReader* dwarf_reader,
+                                     struct go_tls_symaddrs_t* symaddrs);
 
 }  // namespace stirling
 }  // namespace px

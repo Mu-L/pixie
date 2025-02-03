@@ -55,6 +55,7 @@ enum class QLObjectType {
   // General module type.
   kModule,
   kTraceModule,
+  kTraceProgram,
   kDict,
   kTracingVariable,
   kProbe,
@@ -168,7 +169,7 @@ class QLObject {
   absl::flat_hash_set<std::string> AllAttributes() const {
     absl::flat_hash_set<std::string> attrs;
     for (const auto& [k, v] : attributes_) {
-      PL_UNUSED(v);
+      PX_UNUSED(v);
       attrs.insert(k);
     }
     return attrs;

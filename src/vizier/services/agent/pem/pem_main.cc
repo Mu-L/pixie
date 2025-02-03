@@ -20,9 +20,12 @@
 
 #include "src/integrations/grpc_clocksync/grpc_clock_converter.h"
 #include "src/vizier/services/agent/pem/pem_manager.h"
+#include "src/vizier/services/agent/shared/base/lifecycle.h"
 
 #include "src/common/base/base.h"
 #include "src/common/signal/signal.h"
+#include "src/common/system/kernel_version.h"
+#include "src/common/system/linux_headers_utils.h"
 #include "src/shared/version/version.h"
 
 DEFINE_string(nats_url, gflags::StringFromEnv("PL_NATS_URL", "pl-nats"),
@@ -35,51 +38,14 @@ DEFINE_string(clock_converter, gflags::StringFromEnv("PL_CLOCK_CONVERTER", "defa
               "Which ClockConverter to use for converting from mono to reference time. Current "
               "options are 'default' or 'grpc'");
 
-using ::px::vizier::agent::Manager;
+using ::px::vizier::agent::DefaultDeathHandler;
 using ::px::vizier::agent::PEMManager;
-
-class AgentDeathHandler : public px::FatalErrorHandlerInterface {
- public:
-  AgentDeathHandler() = default;
-  void OnFatalError() const override {
-    // Stack trace will print automatically; any additional state dumps can be done here.
-    // Note that actions here must be async-signal-safe and must not allocate memory.
-  }
-};
-
-// Signal handlers for graceful termination.
-class AgentTerminationHandler {
- public:
-  // This list covers signals that are handled gracefully.
-  static constexpr auto kSignals = ::px::MakeArray(SIGINT, SIGQUIT, SIGTERM, SIGHUP);
-
-  static void InstallSignalHandlers() {
-    for (size_t i = 0; i < kSignals.size(); ++i) {
-      signal(kSignals[i], AgentTerminationHandler::OnTerminate);
-    }
-  }
-
-  static void set_manager(Manager* manager) { manager_ = manager; }
-
-  static void OnTerminate(int signum) {
-    if (manager_ != nullptr) {
-      LOG(INFO) << "Trying to gracefully stop agent manager";
-      auto s = manager_->Stop(std::chrono::seconds{5});
-      if (!s.ok()) {
-        LOG(ERROR) << "Failed to gracefully stop agent manager, it will terminate shortly.";
-      }
-      exit(signum);
-    }
-  }
-
- private:
-  inline static Manager* manager_ = nullptr;
-};
+using ::px::vizier::agent::TerminationHandler;
 
 int main(int argc, char** argv) {
   px::EnvironmentGuard env_guard(&argc, argv);
 
-  AgentDeathHandler err_handler;
+  DefaultDeathHandler err_handler;
 
   // This covers signals such as SIGSEGV and other fatal errors.
   // We print the stack trace and die.
@@ -87,11 +53,9 @@ int main(int argc, char** argv) {
   signal_action->RegisterFatalErrorHandler(err_handler);
 
   // Install signal handlers where graceful exit is possible.
-  AgentTerminationHandler::InstallSignalHandlers();
+  TerminationHandler::InstallSignalHandlers();
 
   sole::uuid agent_id = sole::uuid4();
-  LOG(INFO) << absl::Substitute("Pixie PEM. Version: $0, id: $1", px::VersionInfo::VersionString(),
-                                agent_id.str());
 
   if (FLAGS_clock_converter == "grpc") {
     px::system::Config::ResetInstance(
@@ -101,16 +65,36 @@ int main(int argc, char** argv) {
   if (FLAGS_host_ip.length() == 0) {
     LOG(FATAL) << "The HOST_IP must be specified";
   }
-  auto manager = PEMManager::Create(agent_id, FLAGS_pod_name, FLAGS_host_ip, FLAGS_nats_url)
-                     .ConsumeValueOrDie();
+  px::system::KernelVersion kernel_version = px::system::GetCachedKernelVersion();
+  LOG(INFO) << absl::Substitute("Pixie PEM. Version: $0, id: $1, kernel version: $2",
+                                px::VersionInfo::VersionString(), agent_id.str(),
+                                kernel_version.ToString());
 
-  AgentTerminationHandler::set_manager(manager.get());
+  auto kernel_headers_installed = false;
+  auto uname = px::system::GetUname();
+  if (uname.ok()) {
+    const auto host_path = px::system::Config::GetInstance().ToHostPath(
+        absl::StrCat(px::system::kLinuxModulesDir, uname.ConsumeValueOrDie(), "/build"));
 
-  PL_CHECK_OK(manager->Run());
-  PL_CHECK_OK(manager->Stop(std::chrono::seconds{5}));
+    const auto resolved_host_path = px::system::ResolvePossibleSymlinkToHostPath(host_path);
+    kernel_headers_installed = resolved_host_path.ok();
+  }
+
+  auto kernel_info = px::system::KernelInfo{
+      kernel_version,
+      kernel_headers_installed,
+  };
+  auto manager =
+      PEMManager::Create(agent_id, FLAGS_pod_name, FLAGS_host_ip, FLAGS_nats_url, kernel_info)
+          .ConsumeValueOrDie();
+
+  TerminationHandler::set_manager(manager.get());
+
+  PX_CHECK_OK(manager->Run());
+  PX_CHECK_OK(manager->Stop(std::chrono::seconds{5}));
 
   // Clear the manager, because it has been stopped.
-  AgentTerminationHandler::set_manager(nullptr);
+  TerminationHandler::set_manager(nullptr);
 
   return 0;
 }

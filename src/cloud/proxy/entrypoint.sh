@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/bin/sh -e
 
 # Copyright 2018- The Pixie Authors.
 #
@@ -17,7 +17,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 if [ -n "$PL_DOMAIN_NAME" ]; then
-    sed -i -e "s/[@]PL_DOMAIN_NAME[@]/$PL_DOMAIN_NAME/" /usr/local/openresty/nginx/conf/nginx.conf
+    sed -e "s/[@]PL_DOMAIN_NAME[@]/$PL_DOMAIN_NAME/" /usr/local/openresty/nginx/conf.d/nginx.conf.tmpl > /usr/local/openresty/nginx/conf/nginx.conf
 else
    echo "PL_DOMAIN_NAME undefined, exiting"
    exit 1

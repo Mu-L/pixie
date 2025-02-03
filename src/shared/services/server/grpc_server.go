@@ -20,6 +20,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -105,13 +106,26 @@ func createGRPCAuthFunc(env env.Env, opts *GRPCServerOptions) func(context.Conte
 	}
 }
 
+func codeToLevel(code codes.Code) log.Level {
+	if code == codes.Unavailable {
+		return log.DebugLevel
+	}
+
+	return grpc_logrus.DefaultClientCodeToLevel(code)
+}
+
+func logDecider(fullMethodName string, err error) bool {
+	return !errors.Is(err, context.Canceled)
+}
+
 // CreateGRPCServer creates a GRPC server with default middleware for our services.
 func CreateGRPCServer(env env.Env, serverOpts *GRPCServerOptions) *grpc.Server {
 	logrusOpts := []grpc_logrus.Option{
 		grpc_logrus.WithDurationField(func(duration time.Duration) (string, interface{}) {
 			return "time", duration
 		}),
-		grpc_logrus.WithLevels(grpc_logrus.DefaultClientCodeToLevel),
+		grpc_logrus.WithLevels(codeToLevel),
+		grpc_logrus.WithDecider(logDecider),
 	}
 	opts := []grpc.ServerOption{}
 	if !serverOpts.DisableMiddleware {

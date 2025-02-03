@@ -144,6 +144,8 @@ class AggregateOperator : public Operator {
   const std::vector<GroupInfo>& groups() const { return groups_; }
   const std::vector<std::shared_ptr<AggregateExpression>>& values() const { return values_; }
   bool windowed() const { return pb_.windowed(); }
+  bool partial_agg() const { return pb_.partial_agg(); }
+  bool finalize_results() const { return pb_.finalize_results(); }
 
  private:
   std::vector<std::shared_ptr<AggregateExpression>> values_;
@@ -389,6 +391,8 @@ class OTelExportSinkOperator : public Operator {
   const std::vector<planpb::OTelAttribute>& resource_attributes_normal_encoding() {
     return resource_attributes_normal_encoding_;
   }
+
+  int64_t timeout() { return pb_.endpoint_config().timeout(); }
 
  private:
   std::vector<std::pair<std::string, std::string>> headers_;

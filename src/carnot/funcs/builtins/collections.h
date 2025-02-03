@@ -53,8 +53,16 @@ inline types::StringValue SerializeScalar(types::UInt128Value* value) {
 }
 
 template <typename T>
+inline T CopyIntoAligned(const types::StringValue& data) {
+  alignas(std::alignment_of_v<T>) T val;
+  DCHECK_EQ(data.size(), sizeof(val));
+  std::memcpy(&val, data.data(), sizeof(val));
+  return val;
+}
+
+template <typename T>
 T DeserializeScalar(const types::StringValue& data) {
-  return *reinterpret_cast<const typename types::ValueTypeTraits<T>::native_type*>(data.data());
+  return CopyIntoAligned<typename types::ValueTypeTraits<T>::native_type>(data);
 }
 
 template <>
@@ -63,8 +71,8 @@ inline types::StringValue DeserializeScalar(const types::StringValue& data) {
 }
 template <>
 inline types::UInt128Value DeserializeScalar(const types::StringValue& data) {
-  auto* val = reinterpret_cast<const UInt128*>(data.data());
-  return types::UInt128Value(val->high, val->low);
+  auto val = CopyIntoAligned<UInt128>(data);
+  return types::UInt128Value(val.high, val.low);
 }
 
 template <typename TArg>
@@ -74,26 +82,31 @@ class AnyUDA : public udf::UDA {
   void Update(FunctionContext*, TArg val) {
     // TODO(zasgar): We should find a way to short-circuit the agg since we only care
     // about one value.
-    if (!picked) {
-      val_ = val;
-      picked = true;
+    SetValue(val);
+  }
+
+  void Merge(FunctionContext*, const AnyUDA& other) {
+    if (other.picked) {
+      SetValue(other.val_);
     }
   }
 
-  void Merge(FunctionContext*, const AnyUDA&) {
-    // Does nothing.
+  TArg Finalize(FunctionContext*) {
+    DCHECK(picked) << "AnyUDA uninitialized.";
+    return val_;
   }
-
-  TArg Finalize(FunctionContext*) { return val_; }
 
   static udf::InfRuleVec SemanticInferenceRules() {
     return {udf::InheritTypeFromArgs<AnyUDA>::CreateGeneric()};
   }
 
-  StringValue Serialize(FunctionContext*) { return SerializeScalar(&val_); }
+  StringValue Serialize(FunctionContext*) {
+    DCHECK(picked) << "AnyUDA uninitialized.";
+    return SerializeScalar(&val_);
+  }
 
   Status Deserialize(FunctionContext*, const StringValue& data) {
-    val_ = DeserializeScalar<TArg>(data);
+    SetValue(DeserializeScalar<TArg>(data));
     return Status::OK();
   }
 
@@ -111,6 +124,14 @@ class AnyUDA : public udf::UDA {
  protected:
   TArg val_;
   bool picked = false;
+
+ private:
+  void SetValue(TArg val) {
+    if (!picked) {
+      val_ = val;
+      picked = true;
+    }
+  }
 };
 
 }  // namespace builtins

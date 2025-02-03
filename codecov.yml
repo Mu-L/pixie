@@ -1,4 +1,16 @@
 ---
+codecov:
+  branch: main
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
 ignore:
 - "src/ui/.yarn"
 - "src/ui/src/testing"

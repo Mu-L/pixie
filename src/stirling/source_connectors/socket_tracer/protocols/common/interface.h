@@ -18,12 +18,21 @@
 
 #pragma once
 
+#include <absl/container/flat_hash_map.h>
 #include <deque>
 #include <variant>
 #include <vector>
 
 #include "src/stirling/source_connectors/socket_tracer/bcc_bpf_intf/common.h"
 #include "src/stirling/utils/parse_state.h"
+
+#define CTX_DCHECK(x) DCHECK(x) << "[" << __FILE__ << "]"
+#define CTX_DCHECK_EQ(x, y) DCHECK_EQ(x, y) << "[" << __FILE__ << "]"
+#define CTX_DCHECK_NE(x, y) DCHECK_NE(x, y) << "[" << __FILE__ << "]"
+#define CTX_DCHECK_GE(x, y) DCHECK_GE(x, y) << "[" << __FILE__ << "]"
+#define CTX_DCHECK_GT(x, y) DCHECK_GT(x, y) << "[" << __FILE__ << "]"
+#define CTX_DCHECK_LE(x, y) DCHECK_LE(x, y) << "[" << __FILE__ << "]"
+#define CTX_ECHECK_LT(x, y) ECHECK_LT(x, y) << "[" << __FILE__ << "]"
 
 namespace px {
 namespace stirling {
@@ -104,6 +113,18 @@ ParseState ParseFrame(message_type_t type, std::string_view* buf, TFrameType* fr
                       TStateType* state = nullptr);
 
 /**
+ * Returns the stream ID of the given frame.
+ *
+ * @tparam TFrameType Type of frame to parse.
+ * @param frame The frame to get the stream ID from.
+ * @return The stream ID of the given frame.
+ */
+template <typename TKey, typename TFrameType>
+TKey GetStreamID(TFrameType*) {
+  return TKey(0);
+}
+
+/**
  * StitchFrames is the entry point of stitcher for all protocols. It loops through the responses,
  * matches them with the corresponding requests, and returns stitched request & response pairs.
  *
@@ -117,6 +138,18 @@ RecordsWithErrorCount<TRecordType> StitchFrames(std::deque<TFrameType>* requests
                                                 TStateType* state);
 
 /**
+ * For protocols that support streams, we use a map of stream ID to frames.
+ *
+ * @param requests: map of stream ID to deque of request frames.
+ * @param responses: map of stream ID to deque of response frames.
+ * @return A vector of entries to be appended to table store.
+ */
+template <typename TRecordType, typename TKey, typename TFrameType, typename TStateType>
+RecordsWithErrorCount<TRecordType> StitchFrames(
+    absl::flat_hash_map<TKey, std::deque<TFrameType>>* requests,
+    absl::flat_hash_map<TKey, std::deque<TFrameType>>* responses, TStateType* state);
+
+/**
  * The BaseProtocolTraits all ProtocolTraits should inherit from. It provides a default
  * UpdateTimestamps method that applies to most protocols.
  * @tparam TRecord The type of the record for the derived ProtocolTraits.
@@ -128,6 +161,10 @@ struct BaseProtocolTraits {
     record->req.timestamp_ns = func(record->req.timestamp_ns);
     record->resp.timestamp_ns = func(record->resp.timestamp_ns);
   }
+  enum StreamSupport { NoStream, UseStream };
+  // Protocol does not support streams by default. Override this in the derived ProtocolTraits to
+  // parse frames into map of stream ID to frames instead of a single deque for all streams.
+  static constexpr StreamSupport stream_support = NoStream;
 };
 
 }  // namespace protocols

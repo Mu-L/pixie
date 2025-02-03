@@ -37,7 +37,7 @@ bool IsGoExecutable(ElfReader* elf_reader);
 // elf_reader.
 // TODO(yzhao): We'll use this to determine the corresponding Golang executable's TLS data
 // structures and their offsets.
-StatusOr<std::string> ReadBuildVersion(ElfReader* elf_reader);
+StatusOr<std::string> ReadGoBuildVersion(ElfReader* elf_reader);
 
 // Describes a Golang type that implement an interface.
 struct IntfImplTypeInfo {
@@ -55,6 +55,8 @@ struct IntfImplTypeInfo {
 // Returns a map of all interfaces, and types that implement that interface in a go binary.
 StatusOr<absl::flat_hash_map<std::string, std::vector<IntfImplTypeInfo>>> ExtractGolangInterfaces(
     ElfReader* elf_reader);
+
+void PrintTo(const std::vector<IntfImplTypeInfo>& infos, std::ostream* os);
 
 }  // namespace obj_tools
 }  // namespace stirling

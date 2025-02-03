@@ -118,7 +118,7 @@ class PixieModuleTest : public QLObjectTest {
     CHECK(google::protobuf::TextFormat::MergeFromString(kRegInfoProto, &udf_proto));
 
     info_ = std::make_unique<planner::RegistryInfo>();
-    PL_CHECK_OK(info_->Init(udf_proto));
+    PX_CHECK_OK(info_->Init(udf_proto));
     udfspb::UDTFSourceSpec spec;
     google::protobuf::TextFormat::MergeFromString(kUDTFSourcePb, &spec);
     info_->AddUDTF(spec);
@@ -289,6 +289,62 @@ TEST_F(PixieModuleTest, script_reference_test_with_args) {
   EXPECT_MATCH(args[3], String("-30s"));
   EXPECT_MATCH(args[4], String("namespace"));
   EXPECT_MATCH(args[5], ColumnNode("namespace_col"));
+}
+
+TEST_F(PixieModuleTest, format_duration) {
+  // Test positive.
+  {
+    ASSERT_OK_AND_ASSIGN(auto result, ParseExpression("px.format_duration(5 * 1000 * 1000)"));
+    ASSERT_TRUE(ExprObject::IsExprObject(result));
+    auto expr = static_cast<ExprObject*>(result.get());
+    ASSERT_MATCH(expr->expr(), String());
+    EXPECT_EQ(static_cast<StringIR*>(expr->expr())->str(), "5ms");
+  }
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         ParseExpression("px.format_duration(5 * 1000 * 1000 * 1000)"));
+    ASSERT_TRUE(ExprObject::IsExprObject(result));
+    auto expr = static_cast<ExprObject*>(result.get());
+    ASSERT_MATCH(expr->expr(), String());
+    EXPECT_EQ(static_cast<StringIR*>(expr->expr())->str(), "5s");
+  }
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         ParseExpression("px.format_duration(5 * 60 * 1000 * 1000 * 1000)"));
+    ASSERT_TRUE(ExprObject::IsExprObject(result));
+    auto expr = static_cast<ExprObject*>(result.get());
+    ASSERT_MATCH(expr->expr(), String());
+    EXPECT_EQ(static_cast<StringIR*>(expr->expr())->str(), "5m");
+  }
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         ParseExpression("px.format_duration(60 * 60 * 1000 * 1000 * 1000)"));
+    ASSERT_TRUE(ExprObject::IsExprObject(result));
+    auto expr = static_cast<ExprObject*>(result.get());
+    ASSERT_MATCH(expr->expr(), String());
+    EXPECT_EQ(static_cast<StringIR*>(expr->expr())->str(), "1h");
+  }
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         ParseExpression("px.format_duration(24 * 60 * 60 * 1000 * 1000 * 1000)"));
+    ASSERT_TRUE(ExprObject::IsExprObject(result));
+    auto expr = static_cast<ExprObject*>(result.get());
+    ASSERT_MATCH(expr->expr(), String());
+    EXPECT_EQ(static_cast<StringIR*>(expr->expr())->str(), "1d");
+  }
+  // Test negative value.
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         ParseExpression("px.format_duration(-5 * 60 * 1000 * 1000 * 1000)"));
+    ASSERT_TRUE(ExprObject::IsExprObject(result));
+    auto expr = static_cast<ExprObject*>(result.get());
+    ASSERT_MATCH(expr->expr(), String());
+    EXPECT_EQ(static_cast<StringIR*>(expr->expr())->str(), "-5m");
+  }
 }
 
 TEST_F(PixieModuleTest, parse_duration) {

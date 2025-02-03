@@ -31,8 +31,9 @@ go_library(
         "//src/pixie_cli/pkg/utils",
         "//src/shared/goversion",
         "@com_github_getsentry_sentry_go//:sentry-go",
+        "@com_github_segmentio_analytics_go_v3//:analytics-go",
         "@com_github_sirupsen_logrus//:logrus",
-        "@in_gopkg_segmentio_analytics_go_v3//:analytics-go_v3",
+        "@com_github_spf13_viper//:viper",
     ],
 )
 
@@ -76,15 +77,6 @@ container_push(
     format = "Docker",
     image = ":px_image",
     registry = "gcr.io",
-    repository = "pixie-prod/pixie-prod-artifacts/px",
-    tag = "{STABLE_BUILD_TAG}",
-)
-
-container_push(
-    name = "push_px_image_to_docker",
-    format = "Docker",
-    image = ":px_image",
-    registry = "index.docker.io",
-    repository = "pixielabs/px",
+    repository = "pixie-oss/pixie-prod/px",
     tag = "{STABLE_BUILD_TAG}",
 )

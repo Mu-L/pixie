@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("//bazel:pl_build_system.bzl", "pl_cc_binary", "pl_cc_library", "pl_cc_test")
+load("//bazel:pl_build_system.bzl", "pl_cc_binary", "pl_cc_bpf_test", "pl_cc_library", "pl_cc_test")
 
 package(default_visibility = ["//src/stirling:__subpackages__"])
 
@@ -33,20 +33,18 @@ pl_cc_library(
         ],
     ),
     deps = [
+        "//:llvm",
+        "//src/common/json:cc_library",
         "//src/common/system:cc_library",
+        "//src/stirling/bpf_tools/bcc_bpf:task_struct_mem_read",
+        "//src/stirling/bpf_tools/bcc_bpf_intf:cc_library",
+        "//src/stirling/bpf_tools/probe_specs:cc_library",
+        "//src/stirling/bpf_tools/rr:cc_library",
         "//src/stirling/obj_tools:cc_library",
         "//src/stirling/utils:cc_library",
-        "//src/common/json:cc_library",
-        "//src/stirling/bpf_tools/bcc_bpf_intf:cc_library",
-        "//src/stirling/bpf_tools/bcc_bpf:task_struct_mem_read",
-    ] + select({
-        "@bazel_tools//src/conditions:linux_x86_64": [
-            "@com_github_iovisor_bcc//:bcc",
-            "@com_github_iovisor_bpftrace//:bpftrace",
-            "//:llvm",
-        ],
-        "//conditions:default": [],
-    }),
+        "@com_github_iovisor_bcc//:bcc",
+        "@com_github_iovisor_bpftrace//:bpftrace",
+    ],
 )
 
 pl_cc_binary(
@@ -64,7 +62,7 @@ pl_cc_test(
     ],
 )
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "bcc_wrapper_bpf_test",
     srcs = ["bcc_wrapper_bpf_test.cc"],
     tags = [
@@ -78,7 +76,7 @@ pl_cc_test(
     ],
 )
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "bcc_symbolizer_bpf_test",
     srcs = ["bcc_symbolizer_bpf_test.cc"],
     tags = [
@@ -91,7 +89,7 @@ pl_cc_test(
     ],
 )
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "bpftrace_wrapper_bpf_test",
     srcs = ["bpftrace_wrapper_bpf_test.cc"],
     tags = [
@@ -104,7 +102,7 @@ pl_cc_test(
     ],
 )
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "task_struct_resolver_bpf_test",
     srcs = ["task_struct_resolver_bpf_test.cc"],
     tags = [
@@ -120,19 +118,16 @@ pl_cc_test(
     ],
 )
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "uprobe_extra_trigger_bpf_test",
     srcs = ["uprobe_extra_trigger_bpf_test.cc"],
     tags = [
-        # This test must be exclusive, because other tests that deploy the same container images
-        # could cause extra BPF triggers. In fact, this is what the test internally demonstrates
-        # is a problem.
-        "exclusive",
-        "requires_bpf",
         "cpu:16",
+        "requires_bpf",
     ],
     deps = [
         ":cc_library",
-        "//src/stirling/source_connectors/socket_tracer/testing:container_images",
+        "//src/stirling/source_connectors/socket_tracer/testing/container_images:go_1_19_grpc_client_container",
+        "//src/stirling/source_connectors/socket_tracer/testing/container_images:go_1_19_grpc_server_container",
     ],
 )

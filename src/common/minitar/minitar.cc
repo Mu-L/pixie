@@ -35,7 +35,7 @@
 namespace px {
 namespace tools {
 
-#define PL_RETURN_IF_NOT_ARCHIVE_OK(r, ar)              \
+#define PX_RETURN_IF_NOT_ARCHIVE_OK(r, ar)              \
   {                                                     \
     if (r != ARCHIVE_OK) {                              \
       return error::Internal(archive_error_string(ar)); \
@@ -64,17 +64,17 @@ Status CopyData(struct archive* ar, struct archive* aw) {
     if (r == ARCHIVE_EOF) {
       break;
     }
-    PL_RETURN_IF_NOT_ARCHIVE_OK(r, ar);
+    PX_RETURN_IF_NOT_ARCHIVE_OK(r, ar);
 
     r = archive_write_data_block(aw, buff, size, offset);
-    PL_RETURN_IF_NOT_ARCHIVE_OK(r, ar);
+    PX_RETURN_IF_NOT_ARCHIVE_OK(r, ar);
   }
 
   return Status::OK();
 }
 }  // namespace
 
-Status Minitar::Extract(std::string_view dest_dir, int flags) {
+Status Minitar::Extract(std::string_view dest_dir, std::string_view prefix_to_strip, int flags) {
   int r;
 
   // Declare the deferred closes up-front,
@@ -87,7 +87,7 @@ Status Minitar::Extract(std::string_view dest_dir, int flags) {
   archive_read_support_format_tar(a);
 
   r = archive_read_open_filename(a, file_.string().c_str(), 10240);
-  PL_RETURN_IF_NOT_ARCHIVE_OK(r, a);
+  PX_RETURN_IF_NOT_ARCHIVE_OK(r, a);
 
   while (true) {
     struct archive_entry* entry;
@@ -95,16 +95,28 @@ Status Minitar::Extract(std::string_view dest_dir, int flags) {
     if (r == ARCHIVE_EOF) {
       break;
     }
-    PL_RETURN_IF_NOT_ARCHIVE_OK(r, a);
+    PX_RETURN_IF_NOT_ARCHIVE_OK(r, a);
 
+    // Get the original entry pathname.
+    std::string_view pathname(archive_entry_pathname(entry));
+
+    // Check if the pathname starts with the prefix to strip, and if so, remove it.
+    if (!prefix_to_strip.empty() && absl::StartsWith(pathname, prefix_to_strip)) {
+      pathname.remove_prefix(prefix_to_strip.length());
+    }
+
+    // if a destination directory is provided...
     if (!dest_dir.empty()) {
-      std::string dest_path = absl::StrCat(dest_dir, "/", archive_entry_pathname(entry));
+      // Concatenate the destination directory with the entry's pathname.
+      std::string dest_path = absl::StrCat(dest_dir, "/", pathname);
+      // Set the entry's pathname to the newly constructed path.
       archive_entry_set_pathname(entry, dest_path.c_str());
     }
 
+    // Write the header for the current entry.
     r = archive_write_header(ext, entry);
-    PL_RETURN_IF_NOT_ARCHIVE_OK(r, a);
-    PL_RETURN_IF_ERROR(CopyData(a, ext));
+    PX_RETURN_IF_NOT_ARCHIVE_OK(r, a);
+    PX_RETURN_IF_ERROR(CopyData(a, ext));
   }
 
   return Status::OK();

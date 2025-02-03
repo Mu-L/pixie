@@ -110,7 +110,7 @@ const TriggerWrapper = React.memo(() => {
       className={classes.root}
       type='button'
       onClick={onClick}
-      aria-label={`Open command palette (shortcut: ${[displaySequence].flat().join('+')}`}
+      aria-label={`Open command palette (shortcut: ${[displaySequence].flat().join('+')})`}
     >
       <SearchIcon className={classes.leftIcon} />
       <span className={classes.info}>Run a command...</span>
@@ -123,12 +123,12 @@ TriggerWrapper.displayName = 'TriggerWrapper';
 export const CommandPaletteTrigger = React.memo<{ text: string }>(({ text }) => {
   const modalClasses = useModalStyles();
   const { open, setOpen } = React.useContext(CommandPaletteContext);
+  const onClose = React.useCallback(() => setOpen(false), [setOpen]);
 
-  /* eslint-disable react-memo/require-usememo */
   return (
     <>
       <TriggerWrapper />
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth={false}>
+      <Dialog open={open} onClose={onClose} maxWidth={false}>
         <div className={modalClasses.previewFeatureWarning}>
           <span>Preview feature.&nbsp;</span>
           <a
@@ -146,6 +146,5 @@ export const CommandPaletteTrigger = React.memo<{ text: string }>(({ text }) => 
       </Dialog>
     </>
   );
-  /* eslint-enable react-memo/require-usememo */
 });
 CommandPaletteTrigger.displayName = 'CommandPaletteTrigger';

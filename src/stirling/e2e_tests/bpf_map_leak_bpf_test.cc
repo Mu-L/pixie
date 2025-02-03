@@ -25,6 +25,7 @@
 #include "src/common/exec/exec.h"
 #include "src/common/testing/test_utils/container_runner.h"
 #include "src/common/testing/testing.h"
+#include "src/stirling/core/data_tables.h"
 #include "src/stirling/source_connectors/socket_tracer/socket_trace_connector.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/common.h"
@@ -39,6 +40,8 @@ using ::testing::Contains;
 using ::testing::Key;
 using ::testing::Not;
 
+using ConnInfoMapT = bpf_tools::WrappedBCCMap<uint64_t, struct conn_info_t>;
+
 class BPFMapLeakTest : public testing::SocketTraceBPFTestFixture<>,
                        public ::testing::WithParamInterface<std::string_view> {};
 
@@ -48,8 +51,9 @@ TEST_P(BPFMapLeakTest, UnclosedConnection) {
 
   std::string_view server_path_param = GetParam();
 
-  const int kInactivitySeconds = 10;
-  ConnTracker::set_inactivity_duration(std::chrono::seconds(kInactivitySeconds));
+  std::chrono::milliseconds kInactivityPeriod{100};
+  ConnTracker::set_inactivity_duration(
+      std::chrono::duration_cast<std::chrono::seconds>(kInactivityPeriod));
 
   // Create and run the server with a leaky FD.
   std::filesystem::path server_path = BazelRunfilePath(server_path_param);
@@ -58,25 +62,43 @@ TEST_P(BPFMapLeakTest, UnclosedConnection) {
   SubProcess server;
   ASSERT_OK(server.Start({server_path}, /* stderr_to_stdout */ true));
 
-  // Sleep a bit, just to make sure server is ready.
-  usleep(100000);
+  // Wait for the server to come online.
+  std::string server_stdout;
+  bool server_started = false;
+  for (int iters = 0; iters < 60; iters++) {
+    ASSERT_OK(server.Stdout(&server_stdout));
+    if (absl::StrContains(server_stdout, "Listening for connections on port")) {
+      server_started = true;
+      break;
+    }
+    // Sleep a bit to wait for the server to become ready.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+  ASSERT_TRUE(server_started);
 
   // Now connect to the server.
   SubProcess client;
   ASSERT_OK(client.Start({"curl", "-s", "localhost:8080"}));
 
-  // Sleep a little, to make sure connection is made.
-  usleep(100000);
-
-  // Get the FD of the connection from the server's logs.
-  std::string server_stdout;
-  ASSERT_OK(server.Stdout(&server_stdout));
-  std::regex regex(".*Accepted connection on fd=(\\d+).*");
-  std::smatch match;
-  ASSERT_TRUE(std::regex_search(server_stdout, match, regex));
-  std::string fd_str = match[1];
+  // Wait for the client connection to be made.
+  bool matched = false;
   int32_t fd;
-  ASSERT_TRUE(absl::SimpleAtoi(fd_str, &fd));
+  for (int iters = 0; iters < 60; iters++) {
+    ASSERT_OK(server.Stdout(&server_stdout));
+
+    std::regex regex(".*Accepted connection on fd=(\\d+).*");
+    std::smatch match;
+    LOG(INFO) << server_stdout;
+    if (std::regex_search(server_stdout, match, regex)) {
+      // Get the FD of the connection from the server's logs.
+      std::string fd_str = match[1];
+      ASSERT_TRUE(absl::SimpleAtoi(fd_str, &fd));
+      matched = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+  ASSERT_TRUE(matched);
 
   // Now we know the bpf map key that should leak.
   uint64_t pid = server.child_pid();
@@ -86,8 +108,7 @@ TEST_P(BPFMapLeakTest, UnclosedConnection) {
   // Now kill the server, which should cause a BPF map entry to leak.
   LOG(INFO) << "Killing server";
   server.Signal(SIGINT);
-
-  usleep(100000);
+  server.Wait();
 
   // At this point, server should have been traced.
   // And because it was killed, it should have leaked a BPF map entry.
@@ -100,19 +121,15 @@ TEST_P(BPFMapLeakTest, UnclosedConnection) {
   FLAGS_stirling_conn_map_cleanup_threshold = 1;
   FLAGS_stirling_conn_stats_sampling_ratio = 1;
 
-  testing::DataTables data_tables(SocketTraceConnector::kTables);
+  DataTables data_tables(SocketTraceConnector::kTables);
 
-  auto* socket_trace_connector = dynamic_cast<SocketTraceConnector*>(source_.get());
-  ebpf::BPFHashTable<uint64_t, struct conn_info_t> conn_info_map =
-      socket_trace_connector->GetHashTable<uint64_t, struct conn_info_t>("conn_info_map");
-  std::vector<std::pair<uint64_t, struct conn_info_t>> entries;
+  auto conn_info_map = ConnInfoMapT::Create(&source_->BCC(), "conn_info_map");
 
   // Confirm that the leaked BPF map entry exists.
   source_->TransferData(ctx_.get());
-  entries = conn_info_map.get_table_offline();
-  EXPECT_THAT(entries, Contains(Key(server_bpf_map_key)));
+  EXPECT_THAT(conn_info_map->GetTableOffline(), Contains(Key(server_bpf_map_key)));
 
-  sleep(kInactivitySeconds);
+  std::this_thread::sleep_for(kInactivityPeriod);
 
   // This TransferData should cause the connection tracker to be marked for death.
   source_->TransferData(ctx_.get());
@@ -124,8 +141,7 @@ TEST_P(BPFMapLeakTest, UnclosedConnection) {
   source_->TransferData(ctx_.get());
 
   // Check that the leaked BPF map entry is removed.
-  entries = conn_info_map.get_table_offline();
-  EXPECT_THAT(entries, Not(Contains(Key(server_bpf_map_key))));
+  EXPECT_THAT(conn_info_map->GetTableOffline(), Not(Contains(Key(server_bpf_map_key))));
 }
 
 constexpr std::string_view kTCPServerPath =

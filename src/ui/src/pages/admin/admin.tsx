@@ -18,13 +18,13 @@
 
 import * as React from 'react';
 
+import { alpha } from '@mui/material';
 import { Theme } from '@mui/material/styles';
 import { createStyles, makeStyles } from '@mui/styles';
-import { Route, Switch, Redirect } from 'react-router-dom';
+import { Route, Switch, Redirect, useLocation } from 'react-router-dom';
 
 import { scrollbarStyles, Footer } from 'app/components';
 import { AdminOverview } from 'app/containers/admin/admin-overview';
-import { ClusterDetails } from 'app/containers/admin/cluster-details';
 import { LiveViewButton } from 'app/containers/admin/utils';
 import NavBars from 'app/containers/App/nav-bars';
 import { SidebarContext } from 'app/context/sidebar-context';
@@ -68,16 +68,61 @@ const useStyles = makeStyles((theme: Theme) => createStyles({
     alignItems: 'center',
     height: '100%',
   },
+  titleDivider: {
+    borderRight: `1px ${alpha(theme.palette.foreground.grey5, 0.25)} solid`,
+    height: '25%',
+    margin: `0 ${theme.spacing(2)}`,
+  },
 }), { name: 'AdminPage' });
 
 export const AdminPage: React.FC<WithChildren> = React.memo(({ children }) => {
   const classes = useStyles();
+
+  const { pathname } = useLocation();
+
+  const titleLabel = React.useMemo(() => {
+    const tabSlugs = pathname.split('/');
+    const tabSlug = tabSlugs[tabSlugs.indexOf('admin') + 1];
+    switch (tabSlug) {
+      case 'clusters':
+        return 'Clusters';
+      case 'keys':
+        return 'Keys';
+      case 'plugins':
+        return 'Plugins';
+      case 'users':
+        return 'Users';
+      case 'org':
+        return 'Org Settings';
+      case 'user':
+        return 'User Settings';
+      case 'invite':
+        return 'Invitations';
+      default:
+        return '';
+    }
+  }, [pathname]);
+
+  const titleText = React.useMemo(() => {
+    return titleLabel ? (
+      <div className={classes.titleText}>
+        <span>Admin</span>
+        <span className={classes.titleDivider} />
+        <span>{titleLabel}</span>
+      </div>
+    ) : (
+      <div className={classes.titleText}>
+        <span>Admin</span>
+      </div>
+    );
+  }, [classes.titleText, classes.titleDivider, titleLabel]);
+
   return (
     <div className={classes.root}>
       <SidebarContext.Provider value={{ showLiveOptions: false, showAdmin: true }}>
         <NavBars>
           <div className={classes.title}>
-            <div className={classes.titleText}>Admin</div>
+            {titleText}
           </div>
           <LiveViewButton />
         </NavBars>
@@ -104,17 +149,8 @@ const AdminOverviewPage = () => (
 AdminOverviewPage.displayName = 'AdminOverviewPage';
 
 // eslint-disable-next-line react-memo/require-memo
-const ClusterDetailsPage = () => (
-  <AdminPage>
-    <ClusterDetails />
-  </AdminPage>
-);
-ClusterDetailsPage.displayName = 'ClusterDetailsPage';
-
-// eslint-disable-next-line react-memo/require-memo
 const AdminView: React.FC = () => (
   <Switch>
-    <Route exact path='/admin/clusters/:name' component={ClusterDetailsPage} />
     <Redirect exact from='/admin' to='/admin/clusters' />
     <Route path='/admin' component={AdminOverviewPage} />
   </Switch>

@@ -17,7 +17,7 @@ spec:
       containers:
       - name: profile-server
         imagePullPolicy: IfNotPresent
-        image: gcr.io/pixie-oss/pixie-dev/cloud/profile_server_image
+        image: cloud-profile_server_image
         ports:
         - containerPort: 51500
           name: http2
@@ -74,6 +74,20 @@ spec:
         volumeMounts:
         - name: certs
           mountPath: /certs
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10100
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
       - name: certs
         secret:

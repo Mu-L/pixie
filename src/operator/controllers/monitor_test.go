@@ -74,8 +74,8 @@ func (f *FakeHTTPClient) Get(url string) (*http.Response, error) {
 func TestMonitor_queryPodStatusz(t *testing.T) {
 	httpClient := &FakeHTTPClient{
 		responses: map[string]string{
-			"https://127.0.0.1:8080/statusz":  "",
-			"https://127.0.0.3:50100/statusz": "CloudConnectFailed",
+			"https://127-0-0-1.pl.pod.cluster.local:8080/statusz":   "",
+			"https://127-0-0-3.pl2.pod.cluster.local:50100/statusz": "CloudConnectFailed",
 		},
 	}
 
@@ -83,6 +83,7 @@ func TestMonitor_queryPodStatusz(t *testing.T) {
 		name           string
 		podPort        int32
 		podIP          string
+		podNamespace   string
 		expectedStatus string
 		expectedOK     bool
 	}{
@@ -90,6 +91,7 @@ func TestMonitor_queryPodStatusz(t *testing.T) {
 			name:           "OK",
 			podPort:        8080,
 			podIP:          "127.0.0.1",
+			podNamespace:   "pl",
 			expectedStatus: "",
 			expectedOK:     true,
 		},
@@ -104,6 +106,7 @@ func TestMonitor_queryPodStatusz(t *testing.T) {
 			name:           "unhealthy",
 			podPort:        50100,
 			podIP:          "127.0.0.3",
+			podNamespace:   "pl2",
 			expectedStatus: "CloudConnectFailed",
 			expectedOK:     false,
 		},
@@ -114,6 +117,9 @@ func TestMonitor_queryPodStatusz(t *testing.T) {
 			ok, status := queryPodStatusz(httpClient, &v1.Pod{
 				Status: v1.PodStatus{
 					PodIP: test.podIP,
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: test.podNamespace,
 				},
 				Spec: v1.PodSpec{
 					Containers: []v1.Container{
@@ -169,7 +175,7 @@ func TestMonitor_getCloudConnState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			httpClient := &FakeHTTPClient{
 				responses: map[string]string{
-					"https://127.0.0.1:8080/statusz": test.cloudConnStatusz,
+					"https://127-0-0-1.pl.pod.cluster.local:8080/statusz": test.cloudConnStatusz,
 				},
 			}
 
@@ -182,6 +188,9 @@ func TestMonitor_getCloudConnState(t *testing.T) {
 						Status: v1.PodStatus{
 							PodIP: "127.0.0.1",
 							Phase: test.cloudConnPhase,
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							Namespace: "pl",
 						},
 						Spec: v1.PodSpec{
 							Containers: []v1.Container{
@@ -464,23 +473,8 @@ func TestMonitor_repairVizier_PVC(t *testing.T) {
 		updateCalled bool
 	}{
 		{
-			name:         "MetadataPVCMissing",
-			state:        &vizierState{Reason: status.MetadataPVCMissing},
-			updateCalled: true,
-		},
-		{
 			name:         "MetadataPVCStorageClassUnavailable",
 			state:        &vizierState{Reason: status.MetadataPVCStorageClassUnavailable},
-			updateCalled: true,
-		},
-		{
-			name:         "MetadataPVCPendingBinding",
-			state:        &vizierState{Reason: status.MetadataPVCPendingBinding},
-			updateCalled: true,
-		},
-		{
-			name:         "MetadataStatefulSetPodPending",
-			state:        &vizierState{Reason: status.MetadataStatefulSetPodPending},
 			updateCalled: true,
 		},
 		{
@@ -495,12 +489,12 @@ func TestMonitor_repairVizier_PVC(t *testing.T) {
 			cs := testclient.NewSimpleClientset()
 
 			checkUpdateCall := false
-			update := func(ctx context.Context, obj client.Object, ops ...client.UpdateOption) error {
+			update := func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 				checkUpdateCall = true
 				return nil
 			}
 
-			get := func(ctx context.Context, namespacedName k8stypes.NamespacedName, obj client.Object) error {
+			get := func(ctx context.Context, namespacedName k8stypes.NamespacedName, obj client.Object, opts ...client.GetOption) error {
 				return nil
 			}
 
@@ -515,9 +509,7 @@ func TestMonitor_repairVizier_PVC(t *testing.T) {
 
 func TestMonitor_getCloudConnState_SeveralCloudConns(t *testing.T) {
 	httpClient := &FakeHTTPClient{
-		responses: map[string]string{
-			"https://127.0.0.1:8080/statusz": "",
-		},
+		responses: map[string]string{},
 	}
 
 	pods := &concurrentPodMap{unsafeMap: make(map[string]map[string]*podWrapper)}
@@ -560,8 +552,8 @@ func TestMonitor_getCloudConnState_SeveralCloudConns(t *testing.T) {
 func TestMonitor_NATSPods(t *testing.T) {
 	httpClient := &FakeHTTPClient{
 		responses: map[string]string{
-			"http://127.0.0.1:8222": "",
-			"http://127.0.0.3:8222": "NATS Failed",
+			"http://127-0-0-1.pl.pod.cluster.local:8222": "",
+			"http://127-0-0-3.pl.pod.cluster.local:8222": "NATS Failed",
 		},
 	}
 
@@ -638,6 +630,9 @@ func TestMonitor_NATSPods(t *testing.T) {
 							Status: v1.PodStatus{
 								PodIP: test.natsIP,
 								Phase: test.natsPhase,
+							},
+							ObjectMeta: metav1.ObjectMeta{
+								Namespace: "pl",
 							},
 						},
 					},
@@ -1309,31 +1304,8 @@ func TestMonitor_repairVizier_consolidateVizierDeployments(t *testing.T) {
 				makePod("vizier-metadata-9dk39aj", v1.PodPending, "Deployment"),
 			},
 			hasEtcdOperator:   true,
-			repairCallsUpdate: true,
+			repairCallsUpdate: false,
 			forceUpdate:       false,
-		},
-		{
-			name:  "UseEtcdOperator - persistent not running leads to etcd",
-			state: &vizierState{Reason: status.ControlPlanePodsPending},
-			pods: []runtime.Object{
-				&appsv1.Deployment{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "vizier-metadata",
-						Namespace: "pl",
-					},
-				},
-				&appsv1.StatefulSet{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "vizier-metadata",
-						Namespace: "pl",
-					},
-				},
-				makePod("vizier-metadata-0", v1.PodPending, "StatefulSet"),
-				makePod("vizier-metadata-9dk39aj", v1.PodPending, "Deployment"),
-			},
-			hasEtcdOperator:   true,
-			repairCallsUpdate: true,
-			forceUpdate:       true,
 		},
 		{
 			name:  "!UseEtcdOperator - persistent running defaults to persistent",
@@ -1355,30 +1327,7 @@ func TestMonitor_repairVizier_consolidateVizierDeployments(t *testing.T) {
 				makePod("vizier-metadata-9dk39aj", v1.PodRunning, "Deployment"),
 			},
 			hasEtcdOperator:   false,
-			repairCallsUpdate: true,
-			forceUpdate:       true,
-		},
-		{
-			name:  "!UseEtcdOperator - persistent not running leads to etcd",
-			state: &vizierState{Reason: status.ControlPlanePodsPending},
-			pods: []runtime.Object{
-				&appsv1.Deployment{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "vizier-metadata",
-						Namespace: "pl",
-					},
-				},
-				&appsv1.StatefulSet{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "vizier-metadata",
-						Namespace: "pl",
-					},
-				},
-				makePod("vizier-metadata-0", v1.PodPending, "StatefulSet"),
-				makePod("vizier-metadata-9dk39aj", v1.PodPending, "Deployment"),
-			},
-			hasEtcdOperator:   false,
-			repairCallsUpdate: true,
+			repairCallsUpdate: false,
 			forceUpdate:       false,
 		},
 		{
@@ -1418,7 +1367,7 @@ func TestMonitor_repairVizier_consolidateVizierDeployments(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cs := testclient.NewSimpleClientset(test.pods...)
-			get := func(ctx context.Context, namespacedName k8stypes.NamespacedName, obj client.Object) error {
+			get := func(ctx context.Context, namespacedName k8stypes.NamespacedName, obj client.Object, opts ...client.GetOption) error {
 				vz := obj.(*v1alpha1.Vizier)
 				vz.Spec.UseEtcdOperator = test.hasEtcdOperator
 				vz.Status.Checksum = []byte("1234")
@@ -1426,11 +1375,11 @@ func TestMonitor_repairVizier_consolidateVizierDeployments(t *testing.T) {
 			}
 			callsSpecUpdate := false
 			callsStatusUpdate := false
-			specUpdate := func(ctx context.Context, obj client.Object, ops ...client.UpdateOption) error {
+			specUpdate := func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 				callsSpecUpdate = true
 				return nil
 			}
-			statusUpdate := func(ctx context.Context, obj client.Object, ops ...client.UpdateOption) error {
+			statusUpdate := func(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				callsStatusUpdate = true
 				return nil
 			}

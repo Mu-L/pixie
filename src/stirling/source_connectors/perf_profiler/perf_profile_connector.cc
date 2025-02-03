@@ -55,12 +55,24 @@ namespace px {
 namespace stirling {
 
 PerfProfileConnector::PerfProfileConnector(std::string_view source_name)
-    : SourceConnector(source_name, kTables),
+    : BCCSourceConnector(source_name, kTables),
       stack_trace_sampling_period_(
           std::chrono::milliseconds{FLAGS_stirling_profiler_stack_trace_sample_period_ms}),
       sampling_period_(
           std::chrono::milliseconds{1000 * FLAGS_stirling_profiler_table_update_period_seconds}),
       push_period_(sampling_period_ / 2),
+      profiler_state_overflow_gauge_(
+          BuildGauge("perf_profiler_overflow_gauge",
+                     "Overflow ratio, i.e. actual:expected number of stack traces.")),
+      profiler_transfer_data_counter_(
+          BuildCounter("perf_profiler_transfer_data_counter",
+                       "Count of times perf profiler transfer data is invoked.")),
+      profiler_state_overflow_counter_(
+          BuildCounter("perf_profiler_overflow",
+                       "Count of times the perf profiler overran CFG_OVERRUN_THRESHOLD")),
+      profiler_state_map_read_error_counter_(
+          BuildCounter("perf_profiler_map_read_error",
+                       "Count of times the perf profiler encountered a map lookup error")),
       stats_log_interval_(std::chrono::minutes(FLAGS_stirling_profiler_log_period_minutes) /
                           sampling_period_) {
   constexpr auto kMaxSamplingPeriod = std::chrono::milliseconds{30000};
@@ -83,19 +95,19 @@ Status PerfProfileConnector::InitImpl() {
       IntRoundUpDivide(sampling_period_.count(), stack_trace_sampling_period_.count());
 
   // Because sampling occurs per-cpu, the total number of expected stack traces is:
-  const int32_t expected_stack_traces = ncpus * expected_stack_traces_per_cpu;
+  expected_stack_traces_ = ncpus * expected_stack_traces_per_cpu;
 
   // Include some margin to ensure that hash collisions and data races do not cause data drop:
   const double stack_traces_overprovision_factor = FLAGS_stirling_profiler_stack_trace_size_factor;
 
   // Compute the size of the stack traces map.
   const int32_t provisioned_stack_traces =
-      static_cast<int32_t>(stack_traces_overprovision_factor * expected_stack_traces);
+      static_cast<int32_t>(stack_traces_overprovision_factor * expected_stack_traces_);
 
   // A threshold for checking that we've overrun the maps.
   // This should be higher than expected_stack_traces due to timing variations,
   // but it should be lower than provisioned_stack_traces.
-  const int32_t overrun_threshold = (expected_stack_traces + provisioned_stack_traces) / 2;
+  const int32_t overrun_threshold = (expected_stack_traces_ + provisioned_stack_traces) / 2;
 
   // Compute the size of the perf buffers.
   const double perf_buffer_overprovision_factor = FLAGS_stirling_profiler_perf_buffer_size_factor;
@@ -126,48 +138,44 @@ Status PerfProfileConnector::InitImpl() {
       {"sample_call_stack", static_cast<uint64_t>(stack_trace_sampling_period_.count())});
 
   const auto perf_buffer_specs = MakeArray<bpf_tools::PerfBufferSpec>(
-      {{"histogram_a", HandleHistoEvent, HandleHistoLoss, perf_buffer_size},
-       {"histogram_b", HandleHistoEvent, HandleHistoLoss, perf_buffer_size}});
+      {{kHistogramAName, HandleHistoEvent, HandleHistoLoss, this, perf_buffer_size},
+       {kHistogramBName, HandleHistoEvent, HandleHistoLoss, this, perf_buffer_size}});
 
-  PL_RETURN_IF_ERROR(InitBPFProgram(profiler_bcc_script, defines));
-  PL_RETURN_IF_ERROR(AttachSamplingProbes(probe_specs));
-  PL_RETURN_IF_ERROR(OpenPerfBuffers(perf_buffer_specs, this));
+  PX_RETURN_IF_ERROR(bcc_->InitBPFProgram(profiler_bcc_script, defines));
+  PX_RETURN_IF_ERROR(bcc_->AttachSamplingProbes(probe_specs));
+  PX_RETURN_IF_ERROR(bcc_->OpenPerfBuffers(perf_buffer_specs));
 
-  stack_traces_a_ = std::make_unique<ebpf::BPFStackTable>(GetStackTable("stack_traces_a"));
-  stack_traces_b_ = std::make_unique<ebpf::BPFStackTable>(GetStackTable("stack_traces_b"));
+  stack_traces_a_ = WrappedBCCStackTable::Create(bcc_.get(), "stack_traces_a");
+  stack_traces_b_ = WrappedBCCStackTable::Create(bcc_.get(), "stack_traces_b");
 
-  histogram_a_perf_buffer_ = GetPerfBuffer("histogram_a");
-  histogram_b_perf_buffer_ = GetPerfBuffer("histogram_b");
-
-  profiler_state_ =
-      std::make_unique<ebpf::BPFArrayTable<uint64_t>>(GetArrayTable<uint64_t>("profiler_state"));
+  profiler_state_ = WrappedBCCArrayTable<uint64_t>::Create(bcc_.get(), "profiler_state");
 
   LOG(INFO) << "PerfProfiler: Stack trace profiling sampling probe successfully deployed.";
 
   // Create a symbolizer for user symbols.
   if (FLAGS_stirling_profiler_symbolizer == "bcc") {
-    PL_ASSIGN_OR_RETURN(u_symbolizer_, BCCSymbolizer::Create());
+    PX_ASSIGN_OR_RETURN(u_symbolizer_, BCCSymbolizer::Create());
   } else if (FLAGS_stirling_profiler_symbolizer == "elf") {
-    PL_ASSIGN_OR_RETURN(u_symbolizer_, ElfSymbolizer::Create());
+    PX_ASSIGN_OR_RETURN(u_symbolizer_, ElfSymbolizer::Create());
   } else {
     return error::Internal("Unrecognized symbolizer $0", FLAGS_stirling_profiler_symbolizer);
   }
 
   // Create a symbolizer for kernel symbols.
   // Kernel symbolizer always uses BCC symbolizer.
-  PL_ASSIGN_OR_RETURN(k_symbolizer_, BCCSymbolizer::Create());
+  PX_ASSIGN_OR_RETURN(k_symbolizer_, BCCSymbolizer::Create());
 
   if (FLAGS_stirling_profiler_java_symbols) {
     LOG(INFO) << "PerfProfiler: Java symbolization enabled.";
-    PL_ASSIGN_OR_RETURN(u_symbolizer_, JavaSymbolizer::Create(std::move(u_symbolizer_)));
+    PX_ASSIGN_OR_RETURN(u_symbolizer_, JavaSymbolizer::Create(std::move(u_symbolizer_)));
   } else {
     LOG(INFO) << "PerfProfiler: Java symbolization disabled.";
   }
 
   if (FLAGS_stirling_profiler_cache_symbols) {
     // Add a caching layer on top of the existing symbolizer.
-    PL_ASSIGN_OR_RETURN(u_symbolizer_, CachingSymbolizer::Create(std::move(u_symbolizer_)));
-    PL_ASSIGN_OR_RETURN(k_symbolizer_, CachingSymbolizer::Create(std::move(k_symbolizer_)));
+    PX_ASSIGN_OR_RETURN(u_symbolizer_, CachingSymbolizer::Create(std::move(u_symbolizer_)));
+    PX_ASSIGN_OR_RETURN(k_symbolizer_, CachingSymbolizer::Create(std::move(k_symbolizer_)));
   }
 
   return Status::OK();
@@ -177,7 +185,7 @@ Status PerfProfileConnector::StopImpl() {
   // Must call Close() after attach_uprobes_thread_ has joined,
   // otherwise the two threads will cause concurrent accesses to BCC,
   // that will cause races and undefined behavior.
-  Close();
+  bcc_->Close();
   return Status::OK();
 }
 
@@ -220,7 +228,7 @@ void PerfProfileConnector::CleanupSymbolizers(const absl::flat_hash_set<md::UPID
 }
 
 PerfProfileConnector::StackTraceHisto PerfProfileConnector::AggregateStackTraces(
-    ConnectorContext* ctx, ebpf::BPFStackTable* stack_traces) {
+    ConnectorContext* ctx, WrappedBCCStackTable* stack_traces) {
   // TODO(jps): switch from using get_table_offline() to directly stepping through
   // the histogram data structure. Inline populating our own data structures with this.
   // Avoid an unnecessary copy of the information in local stack_trace_keys_and_counts.
@@ -228,7 +236,6 @@ PerfProfileConnector::StackTraceHisto PerfProfileConnector::AggregateStackTraces
   uint64_t cum_sum_count = 0;
 
   const uint32_t asid = ctx->GetASID();
-  const absl::flat_hash_set<md::UPID>& upids_for_symbolization = ctx->GetUPIDs();
 
   // Cause symbolizers to perform any necessary updates before we put them to work.
   u_symbolizer_->IterationPreTick();
@@ -243,9 +250,8 @@ PerfProfileConnector::StackTraceHisto PerfProfileConnector::AggregateStackTraces
     std::string stack_trace_str;
 
     const md::UPID upid(asid, stack_trace_key.upid.pid, stack_trace_key.upid.start_time_ticks);
-    const bool symbolize = upids_for_symbolization.contains(upid);
 
-    if (symbolize) {
+    if (ctx->UPIDIsInContext(upid)) {
       // The stringifier clears stack-ids out of the stack traces table when it
       // first encounters them. If a stack-id is reused by a different stack-trace-key,
       // the stringifier returns its memoized stack trace string. Because the stack-ids
@@ -259,7 +265,7 @@ PerfProfileConnector::StackTraceHisto PerfProfileConnector::AggregateStackTraces
       // in the stack-traces table in case it gets used by a stack trace that we
       // have not yet encountered on this iteration, but will need to symbolize.
       if (stack_trace_key.user_stack_id >= 0) {
-        stack_traces->clear_stack_id(stack_trace_key.user_stack_id);
+        stack_traces->ClearStackID(stack_trace_key.user_stack_id);
       }
       if (stack_trace_key.kernel_stack_id >= 0) {
         k_stack_ids_to_remove.insert(stack_trace_key.kernel_stack_id);
@@ -287,7 +293,7 @@ PerfProfileConnector::StackTraceHisto PerfProfileConnector::AggregateStackTraces
   // Clear any kernel stack-ids, that were potentially not already cleared,
   // out of the stack traces table.
   for (const int k_stack_id : k_stack_ids_to_remove) {
-    stack_traces->clear_stack_id(k_stack_id);
+    stack_traces->ClearStackID(k_stack_id);
   }
 
   raw_histo_data_.clear();
@@ -297,7 +303,7 @@ PerfProfileConnector::StackTraceHisto PerfProfileConnector::AggregateStackTraces
   return symbolic_histogram;
 }
 
-void PerfProfileConnector::CreateRecords(ebpf::BPFStackTable* stack_traces, ConnectorContext* ctx,
+void PerfProfileConnector::CreateRecords(WrappedBCCStackTable* stack_traces, ConnectorContext* ctx,
                                          DataTable* data_table) {
   constexpr size_t kMaxSymbolSize = 512;
   constexpr size_t kMaxStackDepth = 64;
@@ -333,25 +339,72 @@ void PerfProfileConnector::ProcessBPFStackTraces(ConnectorContext* ctx, DataTabl
   // Choose the maps to consume.
   const bool using_map_set_a = transfer_count_ % 2 == 0;
   auto& stack_traces = using_map_set_a ? stack_traces_a_ : stack_traces_b_;
-  auto& histo_perf_buf = using_map_set_a ? histogram_a_perf_buffer_ : histogram_b_perf_buffer_;
+  auto& perfbuf_name = using_map_set_a ? kHistogramAName : kHistogramBName;
   const uint32_t sample_count_idx = using_map_set_a ? kSampleCountAIdx : kSampleCountBIdx;
 
   // Read out the perf buffer that contains the histogram for this iteration.
   // TODO(jps): change PollPerfBuffer() to use std::chrono.
   constexpr int kPollTimeoutMS = 0;
-  histo_perf_buf->poll(kPollTimeoutMS);
+  const auto poll_status = bcc_->PollPerfBuffer(perfbuf_name, kPollTimeoutMS);
+  LOG_IF(ERROR, !poll_status.ok()) << poll_status.msg();
 
   ++transfer_count_;
 
   // First, tell BPF to switch the maps it writes to.
-  const ebpf::StatusTuple s = profiler_state_->update_value(kTransferCountIdx, transfer_count_);
-  LOG_IF(ERROR, !s.ok()) << "Error writing transfer_count_";
+  const auto map_status = profiler_state_->SetValue(kTransferCountIdx, transfer_count_);
+  LOG_IF(ERROR, !map_status.ok()) << "Error writing transfer_count_: " << map_status.msg();
 
   // Read BPF stack traces & histogram, build records, incorporate records to data table.
   CreateRecords(stack_traces.get(), ctx, data_table);
 
+  const uint64_t num_stack_traces_sampled = profiler_state_->GetValue(sample_count_idx).ValueOr(0);
+  CheckProfilerState(num_stack_traces_sampled);
+
   // Now that we've consumed the data, reset the sample count in BPF.
-  profiler_state_->update_value(sample_count_idx, 0);
+  PX_UNUSED(profiler_state_->SetValue(sample_count_idx, 0));
+}
+
+void PerfProfileConnector::CheckProfilerState(const uint64_t num_stack_traces) {
+  const uint64_t error_code =
+      profiler_state_->GetValue(kErrorStatusIdx).ValueOr(kPerfProfilerStatusOk);
+
+  // Set max overflow count non-zero because, during pem startup, the profiler transfer data
+  // method can get starved; i.e. we do expect a few overflow count errors during bringup.
+  constexpr int64_t max_overflow_error_count = 10;
+  constexpr int64_t max_map_read_error_count = 0;
+  DCHECK_LE(profiler_state_overflow_counter_.Value(), max_overflow_error_count);
+  DCHECK_LE(profiler_state_map_read_error_counter_.Value(), max_map_read_error_count);
+
+  switch (error_code) {
+    case kOverflowError: {
+      // overflow_ratio is actual:expected. That is, the actual number of stack traces sampled
+      // vs. the expected number of stack traces. We keep its max value in the gauge.
+      const double overflow_ratio =
+          static_cast<double>(num_stack_traces) / static_cast<double>(expected_stack_traces_);
+      if (overflow_ratio > profiler_state_overflow_gauge_.Value()) {
+        profiler_state_overflow_gauge_.Set(overflow_ratio);
+      }
+
+      // Compute the increment to profiler_transfer_data_counter_ such that the counter value is
+      // equal to the total number of transfer data invocations.
+      const double current_transfer_counter = profiler_transfer_data_counter_.Value();
+      const double transfer_count_increment = transfer_count_ - current_transfer_counter;
+
+      // Track the total number of overflows and the total number of transfer data invocations.
+      profiler_transfer_data_counter_.Increment(transfer_count_increment);
+      profiler_state_overflow_counter_.Increment();
+      break;
+    }
+    case kMapReadFailureError: {
+      profiler_state_map_read_error_counter_.Increment();
+      break;
+    }
+  }
+  // Reset the BPF map to its default value so that each occurrence
+  // can be detected.
+  if (error_code != kPerfProfilerStatusOk) {
+    PX_UNUSED(profiler_state_->SetValue(kErrorStatusIdx, kPerfProfilerStatusOk));
+  }
 }
 
 void PerfProfileConnector::TransferDataImpl(ConnectorContext* ctx) {

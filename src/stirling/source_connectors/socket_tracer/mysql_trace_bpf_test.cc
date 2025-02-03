@@ -33,7 +33,8 @@
 #include "src/stirling/source_connectors/socket_tracer/protocols/mysql/types.h"
 #include "src/stirling/source_connectors/socket_tracer/protocols/test_output_generator/test_utils.h"
 #include "src/stirling/source_connectors/socket_tracer/socket_trace_connector.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/mysql_container.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/python_mysql_connector_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/common.h"
 
@@ -73,7 +74,7 @@ class MySQLTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */
     StatusOr<std::string> run_result =
         server_.Run(std::chrono::seconds{90},
                     {"--env=MYSQL_ALLOW_EMPTY_PASSWORD=1", "--env=MYSQL_ROOT_HOST=%"});
-    PL_CHECK_OK(run_result);
+    PX_CHECK_OK(run_result);
 
     // Sleep an additional second, just to be safe.
     sleep(1);
@@ -81,7 +82,7 @@ class MySQLTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */
 
   StatusOr<int32_t> RunSQLScript(std::string_view script_path) {
     std::string absl_script_path = BazelRunfilePath(script_path);
-    PL_ASSIGN_OR_RETURN(std::string script_content, px::ReadFileToString(absl_script_path));
+    PX_ASSIGN_OR_RETURN(std::string script_content, px::ReadFileToString(absl_script_path));
 
     // Since script content will be passed through bash, escape any single quotes in the script.
     script_content = absl::StrReplaceAll(script_content, {{"'", "'\\''"}});
@@ -89,10 +90,10 @@ class MySQLTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */
     // Run mysql as a way of generating traffic.
     // Run it through bash, and return the PID, so we can use it to filter captured results.
     std::string cmd = absl::StrFormat(
-        "docker exec %s bash -c 'echo \"%s\" | mysql --protocol=TCP --ssl-mode=DISABLED "
+        "podman exec %s bash -c 'echo \"%s\" | mysql --protocol=TCP --ssl-mode=DISABLED "
         "--host=localhost --port=3306 -uroot & echo $! && wait'",
         server_.container_name(), script_content);
-    PL_ASSIGN_OR_RETURN(std::string out, px::Exec(cmd));
+    PX_ASSIGN_OR_RETURN(std::string out, px::Exec(cmd));
 
     std::vector<std::string_view> lines = absl::StrSplit(out, "\n");
     if (lines.empty()) {
@@ -111,11 +112,11 @@ class MySQLTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */
 
   StatusOr<int32_t> RunPythonScript(std::string_view script_path) {
     std::filesystem::path script_file_path = BazelRunfilePath(script_path);
-    PL_ASSIGN_OR_RETURN(script_file_path, fs::Canonical(script_file_path));
+    PX_ASSIGN_OR_RETURN(script_file_path, fs::Canonical(script_file_path));
     std::filesystem::path script_dir = script_file_path.parent_path();
     std::filesystem::path script_filename = script_file_path.filename();
 
-    PL_ASSIGN_OR_RETURN(
+    PX_ASSIGN_OR_RETURN(
         std::string out,
         client_.Run(std::chrono::seconds{60},
                     {absl::Substitute("--network=container:$0", server_.container_name())},

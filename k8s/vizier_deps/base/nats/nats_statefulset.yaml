@@ -22,7 +22,6 @@ kind: ConfigMap
 metadata:
   name: nats-config
 data:
-  # yamllint disable rule:indentation
   nats.conf: |
     pid_file: "/var/run/nats/nats.pid"
     http: 8222
@@ -32,8 +31,8 @@ data:
       cert_file: "/etc/nats-server-tls-certs/server.crt",
       key_file: "/etc/nats-server-tls-certs/server.key",
       timeout: 3
+      verify: true
     }
-  # yamllint enable rule:indentation
 ---
 apiVersion: v1
 kind: Service
@@ -111,7 +110,8 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: pl-nats
-        image: gcr.io/pixie-oss/pixie-prod/vizier-deps/nats:2.8.4-alpine3.15
+        # yamllint disable-line rule:line-length
+        image: gcr.io/pixie-oss/pixie-prod/vizier-deps/nats:2.9.19-scratch@sha256:5de59286eb54ead4d4a9279846098d4097b9c17a3c0588182398a7250cde1af9
         ports:
         - containerPort: 4222
           name: client
@@ -175,3 +175,37 @@ spec:
               # the NATS Server to gracefully terminate the client connections.
               #
               command: ["/bin/sh", "-c", "/nats-server -sl=ldm=/var/run/nats/nats.pid && /bin/sleep 60"]
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+
+      securityContext:
+        runAsUser: 10100
+        runAsGroup: 10100
+        fsGroup: 10100
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      tolerations:
+      - key: "kubernetes.io/arch"
+        operator: "Equal"
+        value: "amd64"
+        effect: "NoSchedule"
+      - key: "kubernetes.io/arch"
+        operator: "Equal"
+        value: "amd64"
+        effect: "NoExecute"
+      - key: "kubernetes.io/arch"
+        operator: "Equal"
+        value: "arm64"
+        effect: "NoSchedule"
+      - key: "kubernetes.io/arch"
+        operator: "Equal"
+        value: "arm64"
+        effect: "NoExecute"

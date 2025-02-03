@@ -14,12 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("//bazel:pl_build_system.bzl", "pl_cc_test")
+load("//bazel:pl_build_system.bzl", "pl_cc_bpf_test", "pl_cc_test", "pl_sh_bpf_test", "pl_sh_test")
 load("//src/stirling/source_connectors/perf_profiler/testing:testing.bzl", "agent_libs", "agent_libs_arg")
 
 package(default_visibility = ["//src/stirling:__subpackages__"])
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "stirling_bpf_test",
     timeout = "moderate",
     srcs = ["stirling_bpf_test.cc"],
@@ -33,7 +33,7 @@ pl_cc_test(
     ],
 )
 
-pl_cc_test(
+pl_cc_bpf_test(
     name = "bpf_map_leak_bpf_test",
     timeout = "moderate",
     srcs = ["bpf_map_leak_bpf_test.cc"],
@@ -64,7 +64,7 @@ pl_cc_test(
     ],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "stirling_wrapper_kprobe_leak_bpf_test",
     srcs = ["stirling_wrapper_kprobe_leak_bpf_test.sh"],
     args = [
@@ -78,13 +78,12 @@ sh_test(
     flaky = True,
     tags = [
         "cpu:16",
-        "exclusive",
         "requires_bpf",
     ],
     deps = ["//src/stirling/scripts:sh_library"],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "stirling_wrapper_bpf_test",
     srcs = ["stirling_wrapper_bpf_test.sh"],
     args = [
@@ -101,16 +100,13 @@ sh_test(
     # TODO(PL-1462): Uprobe attaching sometimes fails.
     flaky = True,
     tags = [
-        "requires_bpf",
         "cpu:16",
-        # Run exclusive, otherwise BPF probe cleaner may conflict with open probes of other instances,
-        # which will emit warnings, that will then be considered a test failure.
-        "exclusive",
+        "requires_bpf",
     ],
     deps = ["//src/stirling/scripts:sh_library"],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "stirling_wrapper_bpftrace_bpf_test",
     srcs = ["stirling_wrapper_bpftrace_bpf_test.sh"],
     args = [
@@ -123,18 +119,15 @@ sh_test(
     ],
     flaky = True,
     tags = [
-        "requires_bpf",
         "cpu:16",
-        # Run exclusive, otherwise BPF probe cleaner may conflict with open probes of other instances,
-        # which will emit warnings, that will then be considered a test failure.
-        "exclusive",
+        "requires_bpf",
     ],
     deps = [
         "//src/stirling/scripts:sh_library",
     ],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "stirling_wrapper_container_bpf_test",
     srcs = ["stirling_wrapper_container_bpf_test.sh"],
     args = [
@@ -151,9 +144,6 @@ sh_test(
     tags = [
         "requires_bpf",
         "cpu:16",
-        # Run exclusive, otherwise BPF probe cleaner may conflict with open probes of other instances,
-        # which will emit warnings, that will then be considered a test failure.
-        "exclusive",
         # TODO(oazizi): This test times out in TSAN. Figure out why.
         # Likely related to the fact that its running though docker.
         "no_tsan",
@@ -161,7 +151,7 @@ sh_test(
     deps = ["//src/stirling/scripts:sh_library"],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "stirling_perf_bpf_test",
     srcs = ["stirling_perf_bpf_test.sh"],
     args = [
@@ -174,8 +164,6 @@ sh_test(
     tags = [
         "requires_bpf",
         "cpu:16",
-        # Run exclusive to get as little noise as possible while measuring performance.
-        "exclusive",
         # Only intention is to run this with opt builds.
         # Can still run it with -c dbg, but on Jenkins, we only run opt version.
         "no_asan",
@@ -186,7 +174,7 @@ sh_test(
     deps = ["//src/stirling/scripts:sh_library"],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "stirling_wrapper_jvm_stats_bpf_test",
     srcs = ["stirling_wrapper_jvm_stats_bpf_test.sh"],
     args = [
@@ -203,9 +191,6 @@ sh_test(
     tags = [
         "requires_bpf",
         "cpu:16",
-        # Run exclusive, otherwise BPF probe cleaner may conflict with open probes of other instances,
-        # which will emit warnings, that will then be considered a test failure.
-        "exclusive",
         # TODO(PP-1742): Test is flaky, especially with ASAN, likely due to timing issues.
         "manual",
         "no_asan",
@@ -214,7 +199,7 @@ sh_test(
     deps = ["//src/stirling/scripts:sh_library"],
 )
 
-sh_test(
+pl_sh_test(
     name = "stirling_signal_test",
     srcs = ["stirling_signal_test.sh"],
     args = [
@@ -228,7 +213,7 @@ sh_test(
     deps = ["//src/stirling/scripts:sh_library"],
 )
 
-sh_test(
+pl_sh_bpf_test(
     name = "probe_cleaner_bpf_test",
     srcs = ["probe_cleaner_bpf_test.sh"],
     args = [
@@ -242,7 +227,6 @@ sh_test(
     flaky = True,
     tags = [
         "cpu:16",
-        "exclusive",
         "requires_bpf",
     ],
     deps = ["//src/stirling/scripts:sh_library"],

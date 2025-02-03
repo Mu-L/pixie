@@ -102,7 +102,8 @@ void ConnTracker::AddConnOpenEvent(const socket_control_event_t& event) {
   }
   open_info_.timestamp_ns = event.timestamp_ns;
 
-  SetRemoteAddr(event.open.addr, "Inferred from conn_open.");
+  SetRemoteAddr(event.open.raddr, "Inferred from conn_open.");
+  SetLocalAddr(event.open.laddr, "Inferred from conn_open.");
 
   SetRole(event.open.role, "Inferred from conn_open.");
 
@@ -143,7 +144,7 @@ void ConnTracker::AddConnCloseEvent(const socket_control_event_t& event) {
 void ConnTracker::AddDataEvent(std::unique_ptr<SocketDataEvent> event) {
   SetRole(event->attr.role, "inferred from data_event");
   SetProtocol(event->attr.protocol, "inferred from data_event");
-  SetSSL(event->attr.ssl, "inferred from data_event");
+  SetSSL(event->attr.ssl, event->attr.ssl_source, "inferred from data_event");
 
   CheckTracker();
   UpdateTimestamps(event->attr.timestamp_ns);
@@ -178,8 +179,9 @@ void ConnTracker::AddDataEvent(std::unique_ptr<SocketDataEvent> event) {
 
 namespace {
 void UpdateProtocolMetrics(traffic_protocol_t protocol, const conn_stats_event_t& event,
-                           const ConnTracker::ConnStatsTracker& conn_stats) {
-  auto& metrics = SocketTracerMetrics::GetProtocolMetrics(protocol);
+                           const ConnTracker::ConnStatsTracker& conn_stats,
+                           ssl_source_t ssl_source) {
+  auto& metrics = SocketTracerMetrics::GetProtocolMetrics(protocol, ssl_source);
   if (event.rd_bytes > conn_stats.bytes_recv()) {
     metrics.conn_stats_bytes.Increment(event.rd_bytes - conn_stats.bytes_recv());
   }
@@ -191,7 +193,8 @@ void UpdateProtocolMetrics(traffic_protocol_t protocol, const conn_stats_event_t
 
 void ConnTracker::AddConnStats(const conn_stats_event_t& event) {
   SetRole(event.role, "inferred from conn_stats event");
-  SetRemoteAddr(event.addr, "conn_stats event");
+  SetRemoteAddr(event.raddr, "conn_stats event");
+  SetLocalAddr(event.laddr, "conn_stats event");
   UpdateTimestamps(event.timestamp_ns);
 
   CONN_TRACE(1) << absl::Substitute("ConnStats timestamp=$0 wr=$1 rd=$2 close=$3",
@@ -204,7 +207,7 @@ void ConnTracker::AddConnStats(const conn_stats_event_t& event) {
     DCHECK_GE(event.rd_bytes, conn_stats_.bytes_recv());
     DCHECK_GE(event.wr_bytes, conn_stats_.bytes_sent());
 
-    UpdateProtocolMetrics(protocol_, event, conn_stats_);
+    UpdateProtocolMetrics(protocol_, event, conn_stats_, ssl_source_);
 
     conn_stats_.set_bytes_recv(event.rd_bytes);
     conn_stats_.set_bytes_sent(event.wr_bytes);
@@ -475,6 +478,17 @@ void ConnTracker::SetRemoteAddr(const union sockaddr_t addr, std::string_view re
   }
 }
 
+void ConnTracker::SetLocalAddr(const union sockaddr_t addr, std::string_view reason) {
+  if (open_info_.local_addr.family == SockAddrFamily::kUnspecified) {
+    PopulateSockAddr(&addr.sa, &open_info_.local_addr);
+    if (addr.sa.sa_family == PX_AF_UNKNOWN) {
+      open_info_.local_addr.family = SockAddrFamily::kUnspecified;
+    }
+    CONN_TRACE(1) << absl::Substitute("LocalAddr updated $0, reason=[$1]",
+                                      open_info_.local_addr.AddrStr(), reason);
+  }
+}
+
 bool ConnTracker::SetRole(endpoint_role_t role, std::string_view reason) {
   // Don't allow changing active role, unless it is from unknown to something else.
   if (role_ != kRoleUnknown) {
@@ -526,7 +540,7 @@ bool ConnTracker::SetProtocol(traffic_protocol_t protocol, std::string_view reas
   return true;
 }
 
-bool ConnTracker::SetSSL(bool ssl, std::string_view reason) {
+bool ConnTracker::SetSSL(bool ssl, ssl_source_t ssl_source, std::string_view reason) {
   // No change, so we're all good.
   if (ssl_ == ssl) {
     return true;
@@ -535,13 +549,18 @@ bool ConnTracker::SetSSL(bool ssl, std::string_view reason) {
   // Changing the active SSL state of a connection tracker is not allowed.
   if (ssl_ != false) {
     CONN_TRACE(2) << absl::Substitute(
-        "Not allowed to change the SSL state of an active ConnTracker: $0->$1, reason=[$2]", ssl_,
-        ssl, reason);
+        "Not allowed to change the SSL state of an active ConnTracker: $0->$1, reason=[$2] "
+        "source=[$3]",
+        ssl_, ssl, reason, ssl_source_);
     return false;
   }
 
   bool old_ssl = ssl_;
   ssl_ = ssl;
+  ssl_source_ = ssl_source;
+  send_data_.set_ssl_source(ssl_source);
+  recv_data_.set_ssl_source(ssl_source);
+
   CONN_TRACE(1) << absl::Substitute("SSL state changed: $0->$1, reason=[$2]", old_ssl, ssl, reason);
   return true;
 }
@@ -615,7 +634,7 @@ bool ConnTracker::ReadyForDestruction() const {
 }
 
 bool ConnTracker::IsRemoteAddrInCluster(const std::vector<CIDRBlock>& cluster_cidrs) {
-  PL_ASSIGN_OR(InetAddr remote_addr, open_info_.remote_addr.ToInetAddr(), return false);
+  PX_ASSIGN_OR(InetAddr remote_addr, open_info_.remote_addr.ToInetAddr(), return false);
 
   for (const auto& cluster_cidr : cluster_cidrs) {
     if (CIDRContainsIPAddr(cluster_cidr, remote_addr)) {
@@ -776,11 +795,14 @@ void ConnTracker::IterationPreTick(
     return;
   }
 
-  // If remote_addr is missing, it means the connect/accept was not traced.
-  // Attempt to infer the connection information, to populate remote_addr.
-  if (open_info_.remote_addr.family == SockAddrFamily::kUnspecified && socket_info_mgr != nullptr) {
-    InferConnInfo(proc_parser, socket_info_mgr);
+  // If remote_addr is missing, it means the connect/accept syscall was not traced.
+  // Attempt to infer the connection information, to populate remote_addr and local_addr.
+  const bool raddr_found = open_info_.remote_addr.family != SockAddrFamily::kUnspecified;
+  const bool laddr_found = open_info_.local_addr.family != SockAddrFamily::kUnspecified;
+  const bool info_mgr_ok = socket_info_mgr != nullptr;
 
+  if ((!raddr_found || !laddr_found) && info_mgr_ok) {
+    InferConnInfo(proc_parser, socket_info_mgr);
     // TODO(oazizi): If connection resolves to SockAddr type "Other",
     //               we should mark the state in BPF to Other too, so BPF stops tracing.
     //               We should also mark the ConnTracker for death.
@@ -882,19 +904,40 @@ double ConnTracker::StitchFailureRate() const {
 
 namespace {
 
-Status ParseSocketInfoRemoteAddr(const system::SocketInfo& socket_info, SockAddr* addr) {
+Status ParseSocketInfoLocalAddr(const system::SocketInfo& socket_info, SockAddr* local_addr) {
+  switch (socket_info.family) {
+    case AF_INET:
+      PopulateInetAddr(std::get<struct in_addr>(socket_info.local_addr), socket_info.local_port,
+                       local_addr);
+      break;
+    case AF_INET6:
+      PopulateInet6Addr(std::get<struct in6_addr>(socket_info.local_addr), socket_info.local_port,
+                        local_addr);
+      break;
+    case AF_UNIX:
+      PopulateUnixAddr(std::get<struct un_path_t>(socket_info.local_addr).path,
+                       socket_info.local_port, local_addr);
+      break;
+    default:
+      return error::Internal("Unknown socket_info family: $0", socket_info.family);
+  }
+
+  return Status::OK();
+}
+
+Status ParseSocketInfoRemoteAddr(const system::SocketInfo& socket_info, SockAddr* remote_addr) {
   switch (socket_info.family) {
     case AF_INET:
       PopulateInetAddr(std::get<struct in_addr>(socket_info.remote_addr), socket_info.remote_port,
-                       addr);
+                       remote_addr);
       break;
     case AF_INET6:
       PopulateInet6Addr(std::get<struct in6_addr>(socket_info.remote_addr), socket_info.remote_port,
-                        addr);
+                        remote_addr);
       break;
     case AF_UNIX:
       PopulateUnixAddr(std::get<struct un_path_t>(socket_info.remote_addr).path,
-                       socket_info.remote_port, addr);
+                       socket_info.remote_port, remote_addr);
       break;
     default:
       return error::Internal("Unknown socket_info family: $0", socket_info.family);
@@ -923,6 +966,9 @@ void ConnTracker::InferConnInfo(system::ProcParser* proc_parser,
   DCHECK(proc_parser != nullptr);
   DCHECK(socket_info_mgr != nullptr);
 
+  const bool raddr_found = open_info_.remote_addr.family != SockAddrFamily::kUnspecified;
+  const bool laddr_found = open_info_.local_addr.family != SockAddrFamily::kUnspecified;
+
   if (conn_resolution_failed_) {
     // We've previously tried and failed to perform connection inference,
     // so don't waste any time...a connection only gets one chance.
@@ -936,7 +982,9 @@ void ConnTracker::InferConnInfo(system::ProcParser* proc_parser,
     bool success = conn_resolver_->Setup();
     if (!success) {
       conn_resolver_.reset();
-      conn_resolution_failed_ = true;
+      if (!raddr_found) {
+        conn_resolution_failed_ = true;
+      }
       CONN_TRACE(2) << "Can't infer remote endpoint. Setup failed.";
     } else {
       CONN_TRACE(2) << "FDResolver has been created.";
@@ -998,13 +1046,22 @@ void ConnTracker::InferConnInfo(system::ProcParser* proc_parser,
 
   // Success! Now copy the inferred socket information into the ConnTracker.
 
-  Status s = ParseSocketInfoRemoteAddr(socket_info, &open_info_.remote_addr);
-  if (!s.ok()) {
-    conn_resolver_.reset();
-    conn_resolution_failed_ = true;
-    LOG(ERROR) << absl::Substitute("Remote address (type=$0) parsing failed. Message: $1",
-                                   socket_info.family, s.msg());
-    return;
+  if (!laddr_found) {
+    Status s = ParseSocketInfoLocalAddr(socket_info, &open_info_.local_addr);
+    if (!s.ok()) {
+      CONN_TRACE(2) << absl::Substitute("Local address (type=$0) parsing failed. Message: $1",
+                                        socket_info.family, s.msg());
+    }
+  }
+  if (!raddr_found) {
+    Status s = ParseSocketInfoRemoteAddr(socket_info, &open_info_.remote_addr);
+    if (!s.ok()) {
+      conn_resolver_.reset();
+      conn_resolution_failed_ = true;
+      CONN_TRACE(2) << absl::Substitute("Remote address (type=$0) parsing failed. Message: $1",
+                                        socket_info.family, s.msg());
+      return;
+    }
   }
 
   endpoint_role_t inferred_role = TranslateRole(socket_info.role);

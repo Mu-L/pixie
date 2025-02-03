@@ -33,6 +33,8 @@ parse_args() {
 
 parse_args "$@"
 tmp_dir="$(mktemp -d)"
+index_file="${INDEX_FILE:?}"
+gh_repo="${GH_REPO:?}"
 
 helm_gcs_bucket="pixie-operator-charts"
 if [[ $VERSION == *"-"* ]]; then
@@ -40,6 +42,8 @@ if [[ $VERSION == *"-"* ]]; then
 fi
 
 repo_path=$(pwd)
+# shellcheck source=ci/artifact_utils.sh
+. "${repo_path}/ci/artifact_utils.sh"
 helm_path="${repo_path}/k8s/operator/helm"
 
 # Create Chart.yaml for this release for Helm3.
@@ -52,9 +56,8 @@ version: ${VERSION}" > "${helm_path}/Chart.yaml"
 cp "${repo_path}/k8s/operator/crd/base/px.dev_viziers.yaml" "${helm_path}/crds/vizier_crd.yaml"
 
 # Updates templates with Helm-specific template functions.
-#shellcheck disable=SC2016,SC2086
-helm_tmpl_checks="$(cat ${repo_path}/k8s/operator/helm/olm_template_checks.tmpl)"
-sed -i "1c${helm_tmpl_checks}" "${repo_path}/k8s/operator/helm/templates/00_olm.yaml"
+helm_tmpl_checks="$(cat "${repo_path}/k8s/operator/helm/olm_template_checks.tmpl")"
+find "${repo_path}/k8s/operator/helm/templates" -type f -exec sed -i "/HELM_DEPLOY_OLM_PLACEHOLDER/c\\${helm_tmpl_checks}" {} \;
 rm "${repo_path}/k8s/operator/helm/olm_template_checks.tmpl"
 
 # Fetch all of the current charts in GCS, because generating the index needs all pre-existing tar versions present.
@@ -82,5 +85,16 @@ helm package "${helm_path}2" -d "${tmp_dir}/${helm_gcs_bucket}"
 # Update the index file.
 helm repo index "${tmp_dir}/${helm_gcs_bucket}" --url "https://${helm_gcs_bucket}.storage.googleapis.com"
 
+upload_artifact_to_mirrors "operator" "${VERSION}" "${tmp_dir}/${helm_gcs_bucket}/pixie-operator-chart-${VERSION}.tgz" "pixie-operator-chart-${VERSION}.tgz"
+
 # Upload the new index and tar to gcs by syncing. This will help keep the timestamps for pre-existing tars the same.
 gsutil rsync "${tmp_dir}/${helm_gcs_bucket}" "gs://${helm_gcs_bucket}"
+
+# Generate separate index file for GH.
+mkdir -p "${tmp_dir}/gh_helm_chart"
+helm package "${helm_path}" -d "${tmp_dir}/gh_helm_chart"
+# Pull index file.
+curl https://artifacts.px.dev/helm_charts/operator/index.yaml -o old_index.yaml
+# Update the index file.
+helm repo index "${tmp_dir}/gh_helm_chart" --merge old_index.yaml --url "https://github.com/${gh_repo}/releases/download/release%2Foperator%2Fv${VERSION}"
+mv "${tmp_dir}/gh_helm_chart/index.yaml" "${index_file}"

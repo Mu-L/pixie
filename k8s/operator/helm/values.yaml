@@ -8,6 +8,7 @@ deployOLM: ""
 # The namespace that olm should run in. If olm has already been deployed
 # to the cluster, this should be the namespace that olm is already running in.
 olmNamespace: "olm"
+olmNodeSelector: {}
 # The namespace which olm operators should run in. If olm has already
 # been deployed to the cluster, this should be the namespace that the olm operators
 # are running in.
@@ -15,7 +16,14 @@ olmOperatorNamespace: "px-operator"
 # The bundle channel which OLM should listen to for the Vizier operator bundles.
 # Should be "stable" for production-versions of the operator, and "test" for release candidates.
 olmBundleChannel: "stable"
-
+# Optional annotations and labels for CatalogSource.
+olmCatalogSource:
+  # Optional custom annotations to add to deployed pods managed by CatalogSource object.
+  annotations: {}
+  # Optional custom labels to add to deployed pods managed by CatalogSource object.
+  labels: {}
+  # Node selectors to apply for pods managed by CatalogSource object
+  nodeSelector: {}
 ## Vizier configuration
 # The name of the Vizier instance deployed to the cluster.
 name: "pixie"
@@ -62,6 +70,7 @@ pod:
   #   cpu: 100m
   #   memory: 5Gi
   nodeSelector: {}
+  tolerations: []
 # A set of custom patches to apply to the deployed Vizier resources.
 # The key should be the name of the resource to apply the patch to, and the value is the patch to apply.
 # Currently, only a JSON format is accepted, such as:

@@ -21,6 +21,7 @@
 #include "src/common/testing/testing.h"
 #include "src/stirling/core/data_table.h"
 #include "src/stirling/source_connectors/socket_tracer/socket_trace_connector.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/curl_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/demo_apps/go_http/go_http_fixture.h"
 
@@ -93,6 +94,10 @@ TEST_F(GoHTTPTraceTest, RequestAndResponse) {
       std::string(record_batch[kHTTPRemoteAddrIdx]->Get<types::StringValue>(target_record_idx)),
       // On IPv6 host, localhost is resolved to ::1.
       AnyOf(HasSubstr("127.0.0.1"), HasSubstr("::1")));
+  EXPECT_THAT(
+      std::string(record_batch[kHTTPLocalAddrIdx]->Get<types::StringValue>(target_record_idx)),
+      // Due to loopback, the local address is the same as the remote address.
+      AnyOf(HasSubstr("127.0.0.1"), HasSubstr("::1")));
   EXPECT_THAT(record_batch[kHTTPRespBodyIdx]->Get<types::StringValue>(target_record_idx),
               StrEq(absl::StrCat(R"({"greeter":"Hello PixieLabs!"})", "\n")));
   // This test currently performs client-side tracing because of the cluster CIDR in
@@ -146,6 +151,82 @@ TEST_F(GoHTTPTraceTest, LargePostMessage) {
               131096);
 }
 
+class CurlHTTPTraceTest : public SocketTraceBPFTestFixture</* TClientSideTracing */ false> {
+ protected:
+  CurlHTTPTraceTest() : SocketTraceBPFTestFixture() {}
+
+  void SetUp() override {
+    SocketTraceBPFTestFixture::SetUp();
+    go_http_fixture_.LaunchServer();
+  }
+
+  void TearDown() override {
+    SocketTraceBPFTestFixture::TearDown();
+    go_http_fixture_.ShutDown();
+  }
+
+  testing::GoHTTPFixture go_http_fixture_;
+
+  DataTable data_table_{/*id*/ 0, kHTTPTable};
+};
+
+TEST_F(CurlHTTPTraceTest, XFormURLEncodedRequest) {
+  StartTransferDataThread();
+
+  // Uncomment to enable tracing:
+  // FLAGS_stirling_conn_trace_pid = go_http_fixture_.server_pid();
+
+  ::px::stirling::testing::CurlContainer client;
+  auto payload = R"(
+{
+  "commands": [
+    {
+      "server": "api.use-case.svc.cluster.local:5011",
+      "action": "req2",
+      "telemetry": "uninstrumented",
+      "params": {}
+    },
+    {
+      "server": "repo.use-case.svc.cluster.local:5012",
+      "action": "add_user",
+      "telemetry": "uninstrumented",
+      "params": {
+        "name": "John Doe",
+        "email": "fd2@doe.com"
+      }
+    }
+  ]
+}
+)";
+
+  auto uri = absl::Substitute("http://127.0.0.1:$0/post", go_http_fixture_.server_port());
+  auto body = absl::Substitute("'action=$0'", payload);
+  ASSERT_OK(client.Run(std::chrono::seconds{60}, {"--network=host"},
+                       {"-XPOST", "--data-urlencode", body, uri}));
+  client.Wait();
+
+  StopTransferDataThread();
+
+  std::vector<TaggedRecordBatch> tablets = ConsumeRecords(kHTTPTableNum);
+  ASSERT_NOT_EMPTY_AND_GET_RECORDS(const types::ColumnWrapperRecordBatch& record_batch, tablets);
+
+  // We do expect to trace the server.
+  const std::vector<size_t> target_record_indices =
+      testing::FindRecordIdxMatchesPID(record_batch, kHTTPUPIDIdx, go_http_fixture_.server_pid());
+  ASSERT_THAT(target_record_indices, SizeIs(1));
+
+  const size_t target_record_idx = target_record_indices.front();
+
+  EXPECT_THAT(
+      std::string(record_batch[kHTTPReqHeadersIdx]->Get<types::StringValue>(target_record_idx)),
+      AllOf(
+          HasSubstr(R"("Content-Type":"application/x-www-form-urlencoded")"),
+          HasSubstr(absl::Substitute(R"(Host":"127.0.0.1:$0")", go_http_fixture_.server_port()))));
+
+  EXPECT_THAT(record_batch[kHTTPReqBodyIdx]->Get<types::StringValue>(target_record_idx),
+              StrEq(body));
+}
+
 struct TraceRoleTestParam {
   endpoint_role_t role;
   size_t client_records_count;
@@ -180,7 +261,7 @@ TEST_P(TraceRoleTest, VerifyRecordsCount) {
 
     server_record_ids =
         testing::FindRecordIdxMatchesPID(record_batch, kHTTPUPIDIdx, go_http_fixture_.server_pid());
-    PL_LOG_VAR(PrintHTTPTable(record_batch));
+    PX_LOG_VAR(PrintHTTPTable(record_batch));
   }
 
   EXPECT_THAT(client_record_ids, SizeIs(param.client_records_count));

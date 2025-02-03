@@ -45,6 +45,22 @@ constexpr DataElement kRemotePort = {
     types::PatternType::GENERAL,
 };
 
+constexpr DataElement kLocalAddr = {
+    "local_addr",
+    "IP address of the local endpoint.",
+    types::DataType::STRING,
+    types::SemanticType::ST_IP_ADDRESS,
+    types::PatternType::GENERAL,
+};
+
+constexpr DataElement kLocalPort = {
+    "local_port",
+    "Port of the local endpoint.",
+    types::DataType::INT64,
+    types::SemanticType::ST_PORT,
+    types::PatternType::GENERAL,
+};
+
 constexpr DataElement kTraceRole = {
     "trace_role",
     "The role (client-or-server) of the process that owns the connections.",
@@ -60,6 +76,14 @@ constexpr DataElement kLatencyNS = {
     types::DataType::INT64,
     types::SemanticType::ST_DURATION_NS,
     types::PatternType::METRIC_GAUGE,
+};
+
+constexpr DataElement kEncrypted = {
+    "encrypted",
+    "If the protocol trace happened over an encrypted connection",
+    types::DataType::BOOLEAN,
+    types::SemanticType::ST_NONE,
+    types::PatternType::GENERAL_ENUM,
 };
 
 constexpr DataElement kPXInfo = {

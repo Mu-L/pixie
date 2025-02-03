@@ -27,7 +27,8 @@
 
 #include "src/common/exec/exec.h"
 #include "src/stirling/core/output.h"
-#include "src/stirling/source_connectors/socket_tracer/testing/container_images.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/golang_sqlx_container.h"
+#include "src/stirling/source_connectors/socket_tracer/testing/container_images/postgresql_container.h"
 #include "src/stirling/source_connectors/socket_tracer/testing/socket_trace_bpf_test_fixture.h"
 #include "src/stirling/testing/common.h"
 
@@ -50,7 +51,7 @@ class PostgreSQLTraceTest
     : public testing::SocketTraceBPFTestFixture</* TClientSideTracing */ true> {
  protected:
   PostgreSQLTraceTest() {
-    PL_CHECK_OK(container_.Run(std::chrono::seconds{150}, {"--env=POSTGRES_PASSWORD=docker"}));
+    PX_CHECK_OK(container_.Run(std::chrono::seconds{150}, {"--env=POSTGRES_PASSWORD=docker"}));
   }
 
   ::px::stirling::testing::PostgreSQLContainer container_;
@@ -96,7 +97,7 @@ TEST_F(PostgreSQLTraceTest, SelectQuery) {
 
   // --pid host is required to access the correct PID.
   constexpr char kCmdTmpl[] =
-      "docker exec $0 bash -c "
+      "podman exec $0 bash -c "
       R"('psql -h localhost -U postgres -c "$1" &>/dev/null & echo $$! && wait')";
   const std::string kCreateTableCmd =
       absl::Substitute(kCmdTmpl, container_.container_name(),
@@ -131,7 +132,7 @@ TEST_F(PostgreSQLTraceTest, GolangSqlxDemo) {
   StartTransferDataThread();
 
   ::px::stirling::testing::GolangSQLxContainer sqlx_container;
-  PL_CHECK_OK(sqlx_container.Run(
+  PX_CHECK_OK(sqlx_container.Run(
       std::chrono::seconds{10},
       {absl::Substitute("--network=container:$0", container_.container_name())}));
 
@@ -187,7 +188,7 @@ TEST_F(PostgreSQLTraceTest, GolangSqlxDemo) {
 TEST_F(PostgreSQLTraceTest, FunctionCall) {
   // --pid host is required to access the correct PID.
   constexpr char kCmdTmpl[] =
-      "docker exec $0 bash -c "
+      "podman exec $0 bash -c "
       R"('psql -h localhost -U postgres -c "$1" &>/dev/null & echo $$! && wait')";
   {
     StartTransferDataThread();

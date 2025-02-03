@@ -37,7 +37,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	v1 "k8s.io/api/core/v1"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
@@ -70,6 +69,8 @@ const (
 	statuszCheckInterval = 20 * time.Second
 	// The threshold of number of crashing PEM pods before we declare a cluster degraded.
 	pemCrashingThreshold = 0.25
+	// The number of times etcd should crash before we try to autorepair.
+	etcdCrashLimit = 5
 )
 
 // HTTPClient is the interface for a simple HTTPClient which can execute "Get".
@@ -131,8 +132,8 @@ type VizierMonitor struct {
 	pvcState  *vizierState
 	certState *vizierState
 
-	vzUpdate     func(context.Context, client.Object, ...client.UpdateOption) error
-	vzGet        func(context.Context, types.NamespacedName, client.Object) error
+	vzUpdate     func(context.Context, client.Object, ...client.SubResourceUpdateOption) error
+	vzGet        func(context.Context, types.NamespacedName, client.Object, ...client.GetOption) error
 	vzSpecUpdate func(context.Context, client.Object, ...client.UpdateOption) error
 }
 
@@ -140,7 +141,7 @@ type VizierMonitor struct {
 func (m *VizierMonitor) InitAndStartMonitor(cloudClient *grpc.ClientConn) {
 	// Initialize current state.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	tr.TLSClientConfig = m.getTLSConfig()
 	m.httpClient = &http.Client{Transport: tr}
 	m.cloudClient = cloudClient
 	m.ctx, m.cancel = context.WithCancel(context.Background())
@@ -218,7 +219,7 @@ func (m *VizierMonitor) watchK8sPods() {
 	informer := m.factory.Core().V1().Pods().Informer()
 	stopper := make(chan struct{})
 	defer close(stopper)
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    m.onAddPod,
 		UpdateFunc: m.onUpdatePod,
 		DeleteFunc: m.onDeletePod,
@@ -268,6 +269,25 @@ func (m *VizierMonitor) checkCerts() error {
 	return nil
 }
 
+func (m *VizierMonitor) getTLSConfig() *tls.Config {
+	// This is used as a fallback incase we somehow fail to get the CA for the vizier.
+	fallbackInsecureConfig := &tls.Config{InsecureSkipVerify: true} // lgtm [go/disabled-certificate-check]
+
+	tlsSecret, err := m.clientset.CoreV1().Secrets(m.namespace).Get(context.Background(), "service-tls-certs", metav1.GetOptions{})
+	if err != nil {
+		log.WithError(err).Warn("failed to get certs secret, monitor will use insecure tls to check /statusz")
+		return fallbackInsecureConfig
+	}
+
+	certPool := x509.NewCertPool()
+	if ok := certPool.AppendCertsFromPEM(tlsSecret.Data["ca.crt"]); !ok {
+		log.WithError(err).Warn("failed add CA to pool, monitor will use insecure tls to check /statusz")
+		return fallbackInsecureConfig
+	}
+
+	return &tls.Config{RootCAs: certPool}
+}
+
 // vizierState details the state of Vizier at a snapshot.
 type vizierState struct {
 	// Reason is the description of the state. Should only be set with values enumerated in `src/shared/status/vzstatus.go`
@@ -308,7 +328,7 @@ func getNATSState(client HTTPClient, pods *concurrentPodMap) *vizierState {
 
 	u := url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(natsPod.pod.Status.PodIP, "8222"),
+		Host:   net.JoinHostPort(k8s.GetPodAddr(*natsPod.pod), "8222"),
 	}
 
 	resp, err := client.Get(u.String())
@@ -323,6 +343,31 @@ func getNATSState(client HTTPClient, pods *concurrentPodMap) *vizierState {
 	}
 
 	// Return the value of the cloud connector.
+	return okState()
+}
+
+// getEtcdState determines the state of etcd then translates that
+// to a corresponding VizierState.
+func getEtcdState(pods *concurrentPodMap) *vizierState {
+	pods.mapMu.Lock()
+	defer pods.mapMu.Unlock()
+
+	unlabeledPods, ok := pods.unsafeMap[""]
+	if !ok {
+		return &vizierState{Reason: status.EtcdPodsMissing}
+	}
+
+	for podName, pod := range unlabeledPods {
+		if !strings.HasPrefix(podName, "pl-etcd-") {
+			continue
+		}
+		for _, c := range pod.pod.Status.ContainerStatuses {
+			if c.State.Waiting != nil && c.State.Waiting.Reason == "CrashLoopBackOff" && c.RestartCount >= etcdCrashLimit {
+				return &vizierState{Reason: status.EtcdPodsCrashing}
+			}
+		}
+	}
+
 	return okState()
 }
 
@@ -574,6 +619,13 @@ func (m *VizierMonitor) getVizierState(vz *pixiev1alpha1.Vizier) *vizierState {
 		return natsState
 	}
 
+	if vz.Spec.UseEtcdOperator {
+		etcdState := getEtcdState(m.podStates)
+		if !isOk(etcdState) {
+			return etcdState
+		}
+	}
+
 	pemResourceState := getPEMResourceLimitsState(m.podStates)
 	if !isOk(pemResourceState) {
 		return pemResourceState
@@ -628,7 +680,7 @@ func (m *VizierMonitor) repairVizier(state *vizierState) error {
 		}
 
 		log.Info("NATS pod was successfully deleted")
-	} else if state.Reason == status.MetadataPVCMissing || state.Reason == status.MetadataPVCStorageClassUnavailable || state.Reason == status.MetadataPVCPendingBinding || state.Reason == status.MetadataStatefulSetPodPending {
+	} else if state.Reason == status.MetadataPVCStorageClassUnavailable {
 		log.WithField("reason", state.Reason).Info("Switching to etcd backed metadata store")
 
 		vz := &pixiev1alpha1.Vizier{}
@@ -646,11 +698,34 @@ func (m *VizierMonitor) repairVizier(state *vizierState) error {
 		}
 
 		log.Info("Successfully switched to etcd backed metadata store")
+	} else if state.Reason == status.EtcdPodsCrashing {
+		log.Info("Etcd detected to be crashing, attempting to restart etcd")
+		// Delete etcd, deploy will trigger a new statefulset to startup.
+		err := m.clientset.AppsV1().StatefulSets(m.namespace).Delete(m.ctx, "pl-etcd", metav1.DeleteOptions{})
+		if err != nil {
+			log.WithError(err).Error("Failed to delete etcd statefulset")
+			return err
+		}
+		// Trigger redeploy.
+		vz := &pixiev1alpha1.Vizier{}
+		err = m.vzGet(context.Background(), m.namespacedName, vz)
+		if err != nil {
+			log.WithError(err).Error("Failed to get vizier")
+			return err
+		}
+		if len(vz.Status.Checksum) > 2 {
+			vz.Status.Checksum = vz.Status.Checksum[2:]
+		}
+		err = m.vzUpdate(context.Background(), vz)
+		if err != nil {
+			log.WithError(err).Error("Failed to update status with empty checksum")
+			return err
+		}
 	} else if state.Reason == status.TLSCertsExpired {
 		vz := &pixiev1alpha1.Vizier{}
 		err := m.vzGet(context.Background(), m.namespacedName, vz)
 		if err != nil {
-			log.WithError(err).Error("Failed to get vizier")
+			log.WithError(err).Error("Failed to fetch Vizier")
 			return err
 		}
 
@@ -664,95 +739,6 @@ func (m *VizierMonitor) repairVizier(state *vizierState) error {
 		err = k8s.DeletePods(m.clientset, m.namespace, "")
 		if err != nil {
 			return err
-		}
-	} else if state.Reason == status.ControlPlanePodsPending || state.Reason == status.ControlPlaneFailedToSchedule {
-		// This repair state attempts to clean-up an auto-repair state that was not successful.
-		// In this state, the operator tried to switch a pvc based metadata store to etcd, but failed because
-		// we didn't properly clean up the metadata statefulset and didn't properly setup the etcd deployment.
-		// The failed state thus has two different types of metadata running: the pvc based metadata and the
-		// etc based metadata, and one of them is not operational.
-
-		// This code tries to reconcile that failure: if the pvc-metadata is  functioning, then we
-		// force the system to use the pvc-metadata deployment. If the pvc-metadata is not functional,
-		// then we force the system to use the etcd-metadata deployment.
-		_, err := m.clientset.AppsV1().Deployments(m.namespace).Get(m.ctx, "vizier-metadata", metav1.GetOptions{})
-		// No deployment found, so we are not in the failed repair state.
-		if k8serrors.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			log.WithError(err).Error("Failed to get vizer-metadata deployment")
-			return err
-		}
-		_, err = m.clientset.AppsV1().StatefulSets(m.namespace).Get(m.ctx, "vizier-metadata", metav1.GetOptions{})
-		// No statefulset found, so we are not in the failed repair state.
-		if k8serrors.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			log.WithError(err).Error("Failed to get vizer-metadata statefulset")
-			return err
-		}
-		// Now this means both the deployment and statefulset exist, so we are in the failed repair state.
-		// We need to determine whether the pvc-metadata is functioning or not, and then force the system
-		// to use the functioning metadata store.
-		metadataStatefulsetIsRunning := false
-		// Get the pods owned by the deployment.
-		podList, err := m.clientset.CoreV1().Pods(m.namespace).List(m.ctx, metav1.ListOptions{
-			LabelSelector: "name=vizier-metadata",
-		})
-		if err != nil {
-			log.WithError(err).Error("Failed to list pods that belong to vizier-metadata")
-			return err
-		}
-		for _, pod := range podList.Items {
-			for _, ownerRef := range pod.OwnerReferences {
-				if !(ownerRef.Kind == "StatefulSet" && ownerRef.Name == "vizier-metadata") {
-					continue
-				}
-				metadataStatefulsetIsRunning = pod.Status.Phase == v1.PodRunning
-				break
-			}
-			if metadataStatefulsetIsRunning {
-				break
-			}
-		}
-		log.Infof("Discovered a failed repair state, forcing a %s-based metadata store", func() string {
-			if metadataStatefulsetIsRunning {
-				return "pvc"
-			}
-			return "etcd"
-		}())
-
-		// Update the spec to use etcd operator and clear the checksum
-		// so we force an auto-update.
-		vz := &pixiev1alpha1.Vizier{}
-		err = m.vzGet(context.Background(), m.namespacedName, vz)
-		if err != nil {
-			log.WithError(err).Error("Failed to get vizier")
-			return err
-		}
-		newEtcdOperatorState := !metadataStatefulsetIsRunning
-
-		// If the statefulset is not running but we're using the etcd operator, we should
-		// force a re-run of the deployment to clean up extra state.
-		if vz.Spec.UseEtcdOperator == newEtcdOperatorState {
-			if len(vz.Status.Checksum) > 2 {
-				vz.Status.Checksum = vz.Status.Checksum[2:]
-			}
-			err = m.vzUpdate(context.Background(), vz)
-			if err != nil {
-				log.WithError(err).Error("Failed to update status with empty checksum")
-				return err
-			}
-		} else {
-			// If the statefulset is running, then we should not use the etcd operator.
-			vz.Spec.UseEtcdOperator = newEtcdOperatorState
-			err = m.vzSpecUpdate(context.Background(), vz)
-			if err != nil {
-				log.WithError(err).Error("Failed to update spec to use etcd metadata")
-				return err
-			}
 		}
 	}
 	return nil
@@ -794,7 +780,6 @@ func (m *VizierMonitor) runReconciler() {
 
 // queryPodStatusz returns a pod's self-reported status as served by its statusz endpoint.
 func queryPodStatusz(client HTTPClient, pod *v1.Pod) (bool, string) {
-	podIP := pod.Status.PodIP
 	// Assume that the statusz endpoint is on the first port in the first container.
 	var port int32
 	if len(pod.Spec.Containers) > 0 && len(pod.Spec.Containers[0].Ports) > 0 {
@@ -803,7 +788,7 @@ func queryPodStatusz(client HTTPClient, pod *v1.Pod) (bool, string) {
 
 	u := url.URL{
 		Scheme: "https",
-		Host:   net.JoinHostPort(podIP, fmt.Sprintf("%d", port)),
+		Host:   net.JoinHostPort(k8s.GetPodAddr(*pod), fmt.Sprintf("%d", port)),
 		Path:   "statusz",
 	}
 	resp, err := client.Get(u.String())

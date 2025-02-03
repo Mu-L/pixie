@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -ex
 
 # Copyright 2018- The Pixie Authors.
 #
@@ -18,32 +18,27 @@
 
 repo_path=$(bazel info workspace)
 
-# shellcheck source=ci/gcs_utils.sh
-. "${repo_path}/ci/gcs_utils.sh"
-
-set -ex
+# shellcheck source=ci/artifact_utils.sh
+. "${repo_path}/ci/artifact_utils.sh"
 
 printenv
 
 release_tag=${TAG_NAME##*/v}
-bucket="pixie-prod-artifacts"
-if [[ ! "$release_tag" == *"-"* ]]; then
-  bucket="pixie-dev-public"
-fi
+manifest_updates="${MANIFEST_UPDATES:?}"
 
-gpg --no-tty --batch --yes --import "${BUILDBOT_GPG_KEY_FILE}"
-
-output_path="gs://${bucket}/cli/${release_tag}"
 for arch in amd64 arm64 universal
 do
-  copy_artifact_to_gcs "$output_path" "cli_darwin_${arch}" "cli_darwin_${arch}"
+  artifact_type=""
+  case "${arch}" in
+    amd64) artifact_type="AT_DARWIN_AMD64" ;;
+    arm64) artifact_type="AT_DARWIN_ARM64" ;;
+  esac
+  upload_artifact_to_mirrors "cli" "${release_tag}" "cli_darwin_${arch}" "cli_darwin_${arch}" "${artifact_type}"
 
   # Check to see if it's production build. If so we should also write it to the latest directory.
   if [[ ! "$release_tag" == *"-"* ]]; then
-    output_path="gs://pixie-dev-public/cli/latest"
-    copy_artifact_to_gcs "$output_path" "cli_darwin_${arch}" "cli_darwin_${arch}"
-
-    gpg --no-tty --batch --yes --local-user "${BUILDBOT_GPG_KEY_ID}" --armor --detach-sign "cli_darwin_${arch}"
-    gh release upload "${TAG_NAME}" --repo=pixie-io/pixie "cli_darwin_${arch}" "cli_darwin_${arch}.asc"
+    upload_artifact_to_mirrors "cli" "latest" "cli_darwin_${arch}" "cli_darwin_${arch}"
   fi
 done
+
+create_manifest_update "cli" "${release_tag}" > "${manifest_updates}"

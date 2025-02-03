@@ -24,10 +24,13 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
+	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
+	"github.com/segmentio/analytics-go/v3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
-	"gopkg.in/segmentio/analytics-go.v3"
+	"golang.org/x/exp/slices"
 
 	"px.dev/pixie/src/pixie_cli/pkg/auth"
 	"px.dev/pixie/src/pixie_cli/pkg/pxanalytics"
@@ -36,10 +39,23 @@ import (
 	"px.dev/pixie/src/pixie_cli/pkg/utils"
 )
 
+var (
+	AvailableCloudAddrs = []string{
+		"getcosmic.ai:443",
+		"withpixie.ai:443",
+	}
+	defaultCloudAddr = AvailableCloudAddrs[0]
+)
+
 func init() {
 	// Flags that are relevant to all sub-commands.
-	RootCmd.PersistentFlags().StringP("cloud_addr", "a", "withpixie.ai:443", "The address of Pixie Cloud")
+
+	RootCmd.PersistentFlags().StringP("log_file", "", "", "The log file to redirect output to. if not set, logs will be printed to stdout.")
+	RootCmd.PersistentFlags().StringP("cloud_addr", "a", defaultCloudAddr, "The address of Pixie Cloud")
 	viper.BindPFlag("cloud_addr", RootCmd.PersistentFlags().Lookup("cloud_addr"))
+
+	RootCmd.PersistentFlags().Bool("interactive_cloud_select", false, "Whether to interactively select the cloud address.")
+	viper.BindPFlag("interactive_cloud_select", RootCmd.PersistentFlags().Lookup("interactive_cloud_select"))
 
 	RootCmd.PersistentFlags().StringP("dev_cloud_namespace", "m", "", "The namespace of Pixie Cloud, if using a cluster local cloud.")
 	viper.BindPFlag("dev_cloud_namespace", RootCmd.PersistentFlags().Lookup("dev_cloud_namespace"))
@@ -52,6 +68,12 @@ func init() {
 
 	RootCmd.PersistentFlags().Bool("do_not_track", false, "do_not_track")
 	viper.BindPFlag("do_not_track", RootCmd.PersistentFlags().Lookup("do_not_track"))
+
+	RootCmd.PersistentFlags().String("direct_vizier_addr", "", "If set, connect directly to the Vizier service at the given address.")
+	viper.BindPFlag("direct_vizier_addr", RootCmd.PersistentFlags().Lookup("direct_vizier_addr"))
+
+	RootCmd.PersistentFlags().String("direct_vizier_key", "", "Should be set if direct_vizier_addr is set, the key to authenticate whether the user has permissions to connect to the Vizier service.")
+	viper.BindPFlag("direct_vizier_key", RootCmd.PersistentFlags().Lookup("direct_vizier_key"))
 
 	RootCmd.AddCommand(VersionCmd)
 	RootCmd.AddCommand(AuthCmd)
@@ -71,6 +93,9 @@ func init() {
 	RootCmd.AddCommand(DebugCmd)
 
 	RootCmd.PersistentFlags().MarkHidden("cloud_addr")
+	// log_file is accessed in the cli's main func and as a result only works via the env var.
+	// Hide it from the help text to prevent confusion that the flag can be used.
+	RootCmd.PersistentFlags().MarkHidden("log_file")
 	RootCmd.PersistentFlags().MarkHidden("dev_cloud_namespace")
 	RootCmd.PersistentFlags().MarkHidden("do_not_track")
 
@@ -83,6 +108,8 @@ func init() {
 	viper.BindEnv("testing_env", "PX_TESTING_ENV", "PL_TESTING_ENV")
 	viper.BindEnv("cli_version", "PX_CLI_VERSION", "PL_CLI_VERSION")
 	viper.BindEnv("vizier_version", "PX_VIZIER_VERSION", "PL_VIZIER_VERSION")
+	viper.BindEnv("direct_vizier_key", "PX_DIRECT_VIZIER_KEY")
+	viper.BindEnv("direct_vizier_addr", "PX_DIRECT_VIZIER_ADDR")
 
 	viper.BindPFlags(pflag.CommandLine)
 
@@ -121,7 +148,8 @@ var RootCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		printEnvVars()
 
-		cloudAddr := viper.GetString("cloud_addr")
+		cloudAddr := getCloudAddrIfRequired(cmd)
+
 		if matched, err := regexp.MatchString(".+:[0-9]+$", cloudAddr); !matched && err == nil {
 			viper.Set("cloud_addr", cloudAddr+":443")
 		}
@@ -177,9 +205,59 @@ var RootCmd = &cobra.Command{
 	},
 }
 
+// Name a variable to store a slice of commands that don't require cloudAddr
+var cmdsCloudAddrNotReqd = []*cobra.Command{
+	VersionCmd,
+}
+
+func getCloudAddrIfRequired(cmd *cobra.Command) string {
+	// Commands within allow list should be opted out in addition to Cobra's
+	// default help command
+	if slices.Contains(cmdsCloudAddrNotReqd, cmd) || cmd.Short == "Help about any command" {
+		return defaultCloudAddr
+	}
+	interactiveCloudSelect := viper.GetBool("interactive_cloud_select")
+
+	cloudAddr := viper.GetString("cloud_addr")
+	if interactiveCloudSelect {
+		if !isatty.IsTerminal(os.Stdin.Fd()) {
+			utils.Errorf("No cloud address provided during run within non-interactive shell. Please set the cloud address using the `--cloud_addr` flag or `PX_CLOUD_ADDR` environment variable.")
+			os.Exit(1)
+		} else {
+			prompt := promptui.Select{
+				Label: "Select Pixie cloud",
+				Items: AvailableCloudAddrs,
+			}
+			_, selectedCloud, err := prompt.Run()
+			if err != nil {
+				utils.WithError(err).Fatal("Failed to select cloud address")
+				os.Exit(1)
+			}
+
+			cloudAddr = selectedCloud
+			viper.Set("cloud_addr", cloudAddr)
+		}
+	}
+	return cloudAddr
+}
+
 func checkAuthForCmd(c *cobra.Command) {
+	if viper.GetString("direct_vizier_addr") != "" {
+		if viper.GetString("direct_vizier_key") == "" {
+			utils.Errorf("Failed to authenticate. `direct_vizier_key` must be provided using `PX_DIRECT_VIZIER_KEY`")
+			os.Exit(1)
+		}
+		switch c {
+		case CollectLogsCmd, DeployCmd, UpdateCmd, GetCmd, DeployKeyCmd, APIKeyCmd:
+			utils.Errorf("These commands are unsupported in Direct Vizier mode.")
+			os.Exit(1)
+		default:
+		}
+		return
+	}
+
 	switch c {
-	case DeployCmd, UpdateCmd, RunCmd, LiveCmd, GetCmd, ScriptCmd, DeployKeyCmd, APIKeyCmd:
+	case CollectLogsCmd, DeployCmd, UpdateCmd, RunCmd, LiveCmd, GetCmd, ScriptCmd, DeployKeyCmd, APIKeyCmd:
 		authenticated := auth.IsAuthenticated(viper.GetString("cloud_addr"))
 		if !authenticated {
 			utils.Errorf("Failed to authenticate. Please retry `px auth login`.")

@@ -19,6 +19,7 @@
 #include "src/carnot/exec/otel_export_sink_node.h"
 
 #include <rapidjson/document.h>
+#include <simdutf.h>
 #include <chrono>
 #include <memory>
 #include <queue>
@@ -90,6 +91,14 @@ Status OTelExportSinkNode::CloseImpl(ExecState* exec_state) {
   return Status::OK();
 }
 
+void SetStringOrBytes(std::string str, ::opentelemetry::proto::common::v1::KeyValue* otel_attr) {
+  if (!simdutf::validate_utf8(str.data(), str.length())) {
+    otel_attr->mutable_value()->set_bytes_value(str);
+  } else {
+    otel_attr->mutable_value()->set_string_value(str);
+  }
+}
+
 template <typename C>
 void AddAttributes(google::protobuf::RepeatedPtrField<::opentelemetry::proto::common::v1::KeyValue>*
                        mutable_attributes,
@@ -98,14 +107,14 @@ void AddAttributes(google::protobuf::RepeatedPtrField<::opentelemetry::proto::co
     auto otel_attr = mutable_attributes->Add();
     otel_attr->set_key(px_attr.name());
     if (px_attr.has_string_value()) {
-      otel_attr->mutable_value()->set_string_value(px_attr.string_value());
+      SetStringOrBytes(px_attr.string_value(), otel_attr);
       continue;
     }
     auto attribute_col = rb.ColumnAt(px_attr.column().column_index()).get();
     switch (px_attr.column().column_type()) {
       case types::STRING: {
-        otel_attr->mutable_value()->set_string_value(
-            types::GetValueFromArrowArray<types::STRING>(attribute_col, row_idx));
+        SetStringOrBytes(types::GetValueFromArrowArray<types::STRING>(attribute_col, row_idx),
+                         otel_attr);
         break;
       }
       case types::INT64: {
@@ -193,7 +202,7 @@ void ReplicateData(const std::vector<planpb::OTelAttribute>& attributes_spec,
     for (const auto& [attribute_idx, value_idx] : Enumerate(permutation)) {
       auto attribute = data.mutable_resource()->add_attributes();
       attribute->set_key(attributes_spec[attribute_idx].name());
-      attribute->mutable_value()->set_string_value(values[attribute_idx][value_idx]);
+      SetStringOrBytes(values[attribute_idx][value_idx], attribute);
     }
     add_data(std::move(data));
   }
@@ -206,7 +215,7 @@ Status FormatOTelStatus(int64_t id, const grpc::Status& status) {
 }
 
 using ::opentelemetry::proto::metrics::v1::ResourceMetrics;
-Status OTelExportSinkNode::ConsumeMetrics(const RowBatch& rb) {
+Status OTelExportSinkNode::ConsumeMetrics(ExecState* exec_state, const RowBatch& rb) {
   grpc::ClientContext context;
   for (const auto& header : plan_node_->endpoint_headers()) {
     context.AddMetadata(header.first, header.second);
@@ -224,9 +233,9 @@ Status OTelExportSinkNode::ConsumeMetrics(const RowBatch& rb) {
     // TODO(philkuz) optimize by pooling metrics by resource within a batch.
     // TODO(philkuz) optimize by pooling data per metric per resource.
 
-    auto library_metrics = resource_metrics.add_instrumentation_library_metrics();
+    auto scope_metrics = resource_metrics.add_scope_metrics();
     for (const auto& metric_pb : plan_node_->metrics()) {
-      auto metric = library_metrics->add_metrics();
+      auto metric = scope_metrics->add_metrics();
       metric->set_name(metric_pb.name());
       metric->set_description(metric_pb.description());
       metric->set_unit(metric_pb.unit());
@@ -281,8 +290,19 @@ Status OTelExportSinkNode::ConsumeMetrics(const RowBatch& rb) {
         std::move(resource_metrics), rb, row_idx);
   }
 
+  // Set timeout, to avoid blocking on query.
+  if (plan_node_->timeout() > 0) {
+    std::chrono::system_clock::time_point deadline =
+        std::chrono::system_clock::now() + std::chrono::seconds{plan_node_->timeout()};
+    context.set_deadline(deadline);
+  }
+
   grpc::Status status = metrics_service_stub_->Export(&context, request, &metrics_response_);
   if (!status.ok()) {
+    if (status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
+      exec_state->exec_metrics()->otlp_metrics_timeout_counter.Increment();
+    }
+
     return FormatOTelStatus(plan_node_->id(), status);
   }
   return Status::OK();
@@ -313,14 +333,14 @@ std::string GenerateID(uint64_t num_bytes) {
 }
 
 using ::opentelemetry::proto::trace::v1::ResourceSpans;
-Status OTelExportSinkNode::ConsumeSpans(const RowBatch& rb) {
+Status OTelExportSinkNode::ConsumeSpans(ExecState* exec_state, const RowBatch& rb) {
   grpc::ClientContext context;
   for (const auto& header : plan_node_->endpoint_headers()) {
     context.AddMetadata(header.first, header.second);
   }
   context.set_compression_algorithm(GRPC_COMPRESS_GZIP);
 
-  metrics_response_.Clear();
+  trace_response_.Clear();
   opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest request;
 
   for (int64_t row_idx = 0; row_idx < rb.ColumnAt(0)->length(); ++row_idx) {
@@ -329,9 +349,9 @@ Status OTelExportSinkNode::ConsumeSpans(const RowBatch& rb) {
     auto resource = resource_spans.mutable_resource();
     AddAttributes(resource->mutable_attributes(), plan_node_->resource_attributes_normal_encoding(),
                   rb, row_idx);
-    auto library_spans = resource_spans.add_instrumentation_library_spans();
+    auto scope_spans = resource_spans.add_scope_spans();
     for (const auto& span_pb : plan_node_->spans()) {
-      auto span = library_spans->add_spans();
+      auto span = scope_spans->add_spans();
       if (span_pb.has_name_string()) {
         span->set_name(span_pb.name_string());
       } else {
@@ -400,20 +420,30 @@ Status OTelExportSinkNode::ConsumeSpans(const RowBatch& rb) {
         [&request](ResourceSpans span) { *request.add_resource_spans() = std::move(span); },
         std::move(resource_spans), rb, row_idx);
   }
+  // Set timeout, to avoid blocking on query.
+  if (plan_node_->timeout() > 0) {
+    std::chrono::system_clock::time_point deadline =
+        std::chrono::system_clock::now() + std::chrono::seconds{plan_node_->timeout()};
+    context.set_deadline(deadline);
+  }
 
   grpc::Status status = trace_service_stub_->Export(&context, request, &trace_response_);
   if (!status.ok()) {
+    if (status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
+      exec_state->exec_metrics()->otlp_spans_timeout_counter.Increment();
+    }
+
     return FormatOTelStatus(plan_node_->id(), status);
   }
   return Status::OK();
 }
 
-Status OTelExportSinkNode::ConsumeNextImpl(ExecState*, const RowBatch& rb, size_t) {
+Status OTelExportSinkNode::ConsumeNextImpl(ExecState* exec_state, const RowBatch& rb, size_t) {
   if (plan_node_->metrics().size()) {
-    PL_RETURN_IF_ERROR(ConsumeMetrics(rb));
+    PX_RETURN_IF_ERROR(ConsumeMetrics(exec_state, rb));
   }
   if (plan_node_->spans().size()) {
-    PL_RETURN_IF_ERROR(ConsumeSpans(rb));
+    PX_RETURN_IF_ERROR(ConsumeSpans(exec_state, rb));
   }
   if (rb.eos()) {
     sent_eos_ = true;

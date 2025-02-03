@@ -52,6 +52,7 @@ namespace utils {
 
 using ::px::stirling::bpf_tools::BPFProbeAttachType;
 using ::px::stirling::bpf_tools::UProbeSpec;
+using ::px::stirling::bpf_tools::WrappedBCCArrayTable;
 
 namespace {
 
@@ -137,21 +138,72 @@ StatusOr<TaskStructOffsets> ScanBufferForFields(const struct buf& buf,
 
   TaskStructOffsetsManager offsets_manager(&task_struct_offsets);
 
+#if AARCH64
+  // On aarch64, the cpu_context struct inside the thread_struct, can contain the same address as
+  // the group_leader value of the task_struct. Since the thread_struct is always at the end of the
+  // task_struct, we can just stop searching when we get to the thread_struct. To identify the
+  // offset of the thread_struct, we search for the address of thread local storage which is always
+  // stored `sizeof(cpu_context) + some padding` after the beginning of the thread struct.
+  // See:
+  // https://github.com/torvalds/linux/blob/3ac88fa4605ec98e545fb3ad0154f575fda2de5f/arch/arm64/include/asm/processor.h#L147
+  // for the thread_struct definition.
+  uint64_t tls_addr;
+  // ARM magic to get the system register TPIDR_EL0, which stores the address of thread local
+  // storage.
+  asm volatile("mrs %0, TPIDR_EL0" : "=r"(tls_addr));
+  VLOG(1) << "TLS address = " << tls_addr;
+
+  // We leave some room for padding. The thread_struct almost always seems to have some padding
+  // between cpu_context and tp_value. In the case that there is no padding, it shouldn't affect
+  // us since the values we care about are never right before the thread_struct in the
+  // task_struct.
+  constexpr uint64_t padding = 8;
+  // aarch64's cpu_context struct in linux stores 13 registers. I checked this in v4.14 and v6.1
+  // and it hasn't changed.
+  constexpr uint64_t num_cpu_context_registers = 13;
+  constexpr uint64_t tp_value_offset_in_thread_struct =
+      padding + num_cpu_context_registers * sizeof(uint64_t);
+  // For now we iterate through the buffer twice. At some point we should refactor offsets_manager
+  // to eliminate the need to iterate through the buffer twice.
+  int stop_at_offset = -1;
+  for (uint64_t idx = tp_value_offset_in_thread_struct / sizeof(uint64_t);
+       idx < sizeof(buf.u64words) / sizeof(uint64_t); idx++) {
+    int current_offset = idx * sizeof(uint64_t);
+    if (buf.u64words[idx] == tls_addr) {
+      VLOG(1) << absl::Substitute("[offset = $0] Found tp_value", current_offset);
+      stop_at_offset = current_offset - tp_value_offset_in_thread_struct;
+      VLOG(1) << "Ignoring thread_struct at offset = " << stop_at_offset;
+      break;
+    }
+  }
+  if (stop_at_offset == -1) {
+    return error::Internal(
+        "Failed to find the thread_struct offset within the task_struct. This is required for "
+        "resolving task struct offsets on aarch64");
+  }
+#endif
+
   for (const auto& [idx, val] : Enumerate(buf.u64words)) {
     int current_offset = idx * sizeof(uint64_t);
 
+#if AARCH64
+    if (current_offset == stop_at_offset) {
+      break;
+    }
+#endif
+
     if (pl_nsec_to_clock_t(val) == proc_pid_start_time) {
       VLOG(1) << absl::Substitute("[offset = $0] Found real_start_time", current_offset);
-      PL_RETURN_IF_ERROR(offsets_manager.SetRealStartTimeOffset(current_offset));
+      PX_RETURN_IF_ERROR(offsets_manager.SetRealStartTimeOffset(current_offset));
     }
 
     if (val == task_struct_addr) {
       VLOG(1) << absl::Substitute("[offset = $0] Found group_leader.", current_offset);
-      PL_RETURN_IF_ERROR(offsets_manager.SetGroupLeaderOffset(current_offset));
+      PX_RETURN_IF_ERROR(offsets_manager.SetGroupLeaderOffset(current_offset));
     }
   }
 
-  PL_RETURN_IF_ERROR(offsets_manager.CheckPopulated());
+  PX_RETURN_IF_ERROR(offsets_manager.CheckPopulated());
 
   return task_struct_offsets;
 }
@@ -160,13 +212,13 @@ StatusOr<TaskStructOffsets> ScanBufferForFields(const struct buf& buf,
 
 StatusOr<TaskStructOffsets> ResolveTaskStructOffsetsCore() {
   // Get the PID start time from /proc.
-  PL_ASSIGN_OR_RETURN(uint64_t proc_pid_start_time,
+  PX_ASSIGN_OR_RETURN(uint64_t proc_pid_start_time,
                       ::px::system::GetPIDStartTimeTicks("/proc/self"));
 
-  PL_ASSIGN_OR_RETURN(std::filesystem::path self_path, GetSelfPath());
-  PL_ASSIGN_OR_RETURN(auto elf_reader, obj_tools::ElfReader::Create(self_path.string()));
+  PX_ASSIGN_OR_RETURN(std::filesystem::path self_path, GetSelfPath());
+  PX_ASSIGN_OR_RETURN(auto elf_reader, obj_tools::ElfReader::Create(self_path.string()));
   const int64_t pid = getpid();
-  PL_ASSIGN_OR_RETURN(auto converter,
+  PX_ASSIGN_OR_RETURN(auto converter,
                       obj_tools::ElfAddressConverter::Create(elf_reader.get(), pid));
 
   // Use address instead of symbol to specify this probe,
@@ -181,36 +233,25 @@ StatusOr<TaskStructOffsets> ResolveTaskStructOffsetsCore() {
                     .probe_fn = "task_struct_probe"};
 
   // Deploy the BPF program.
-  auto bcc = std::make_unique<px::stirling::bpf_tools::BCCWrapper>();
+  auto bcc = std::make_unique<px::stirling::bpf_tools::BCCWrapperImpl>();
   std::vector<std::string> cflags;
   // Important! Must tell BCCWrapper that we don't need linux headers, otherwise we may
   // enter an infinite loop if BCCWrapper tries to run the TaskStructResolver again.
   bool requires_linux_headers = false;
-  PL_RETURN_IF_ERROR(bcc->InitBPFProgram(bcc_script, cflags, requires_linux_headers));
-  PL_RETURN_IF_ERROR(bcc->AttachUProbe(uprobe));
+  PX_RETURN_IF_ERROR(bcc->InitBPFProgram(bcc_script, cflags, requires_linux_headers));
+  PX_RETURN_IF_ERROR(bcc->AttachUProbe(uprobe));
 
   // Trigger our uprobe.
   StirlingProbeTrigger();
 
   // Retrieve the task struct address from BPF map.
-  uint64_t task_struct_addr;
-  {
-    ebpf::StatusTuple bpf_status =
-        bcc->GetArrayTable<uint64_t>("task_struct_address_map").get_value(0, task_struct_addr);
-    if (!bpf_status.ok()) {
-      return error::Internal("Failed to read task_struct_address_map");
-    }
-  }
+  auto task_struct_addrs =
+      WrappedBCCArrayTable<uint64_t>::Create(bcc.get(), "task_struct_address_map");
+  PX_ASSIGN_OR_RETURN(const uint64_t task_struct_addr, task_struct_addrs->GetValue(0));
 
   // Retrieve the raw memory buffer of the task struct.
-  struct buf buf;
-  {
-    ebpf::StatusTuple bpf_status =
-        bcc->GetArrayTable<struct buf>("task_struct_buf").get_value(0, buf);
-    if (!bpf_status.ok()) {
-      return error::Internal("Failed to read task_struct_buf");
-    }
-  }
+  auto task_struct_bufs = WrappedBCCArrayTable<struct buf>::Create(bcc.get(), "task_struct_buf");
+  PX_ASSIGN_OR_RETURN(const struct buf buf, task_struct_bufs->GetValue(0));
 
   // Analyze the raw data buffer for the patterns we are looking for.
   return ScanBufferForFields(buf, proc_pid_start_time, task_struct_addr);
@@ -266,7 +307,7 @@ StatusOr<TaskStructOffsets> ResolveTaskStructStartTimeOffsets() {
 
     // Blocking read data from child.
     TaskStructOffsets result;
-    PL_RETURN_IF_ERROR(ReadFromChild(fd[0], &result));
+    PX_RETURN_IF_ERROR(ReadFromChild(fd[0], &result));
 
     // We can't transfer StatusOr through the pipe,
     // so we have to check manually.
@@ -310,23 +351,20 @@ StatusOr<uint64_t> ResolveTaskStructExitCodeOffset() {
   constexpr uint8_t exit_code = 171;
 
   SubProcess proc;
-  PL_RETURN_IF_ERROR(proc.Start([]() -> int { return exit_code; }, {.stop_before_exec = true}));
+  PX_RETURN_IF_ERROR(proc.Start([]() -> int { return exit_code; }, {.stop_before_exec = true}));
 
-  auto bcc = std::make_unique<px::stirling::bpf_tools::BCCWrapper>();
-  PL_RETURN_IF_ERROR(
+  auto bcc = std::make_unique<px::stirling::bpf_tools::BCCWrapperImpl>();
+  PX_RETURN_IF_ERROR(
       bcc->InitBPFProgram(bcc_script, /*cflags*/ {}, /*requires_linux_headers*/ false));
-  PL_RETURN_IF_ERROR(bcc->AttachTracepoint({std::string("sched:sched_process_exit"),
+  PX_RETURN_IF_ERROR(bcc->AttachTracepoint({std::string("sched:sched_process_exit"),
                                             std::string("tracepoint__sched__sched_process_exit")}));
 
   const std::string kProcExitTargetPIDTableName = "proc_exit_target_pid";
-  ebpf::BPFArrayTable proc_exit_target_pid_table =
-      bcc->GetArrayTable<uint32_t>(kProcExitTargetPIDTableName);
+  auto proc_exit_target_pid_table =
+      WrappedBCCArrayTable<uint32_t>::Create(bcc.get(), kProcExitTargetPIDTableName);
+
   // Set target PID in BPF map, which only report event triggered by the launched subprocess.
-  ebpf::StatusTuple ebpf_st =
-      proc_exit_target_pid_table.update_value(/*index*/ 0, proc.child_pid());
-  if (!ebpf_st.ok()) {
-    return error::Internal("Failed to update target PID map, message: $0", ebpf_st.msg());
-  }
+  PX_RETURN_IF_ERROR(proc_exit_target_pid_table->SetValue(0, proc.child_pid()));
 
   // Resume the child process, allow it to exit and trigger the tracepoint probe.
   proc.Signal(SIGCONT);
@@ -348,11 +386,8 @@ StatusOr<uint64_t> ResolveTaskStructExitCodeOffset() {
   }
 
   // Retrieve the raw memory buffer of the task struct.
-  struct buf buf;
-  ebpf_st = bcc->GetArrayTable<struct buf>("task_struct_buf").get_value(/*index*/ 0, buf);
-  if (!ebpf_st.ok()) {
-    return error::Internal("Failed to read task_struct_buf, message: $0", ebpf_st.msg());
-  }
+  auto task_struct_bufs = WrappedBCCArrayTable<struct buf>::Create(bcc.get(), "task_struct_buf");
+  PX_ASSIGN_OR_RETURN(const struct buf buf, task_struct_bufs->GetValue(0));
 
   for (const auto& [idx, val] : Enumerate(buf.u32words)) {
     int current_offset = idx * sizeof(uint32_t);
@@ -369,8 +404,8 @@ StatusOr<uint64_t> ResolveTaskStructExitCodeOffset() {
 }  // namespace
 
 StatusOr<TaskStructOffsets> ResolveTaskStructOffsets() {
-  PL_ASSIGN_OR_RETURN(TaskStructOffsets res, ResolveTaskStructStartTimeOffsets());
-  PL_ASSIGN_OR_RETURN(uint64_t exit_code_offset, ResolveTaskStructExitCodeOffset());
+  PX_ASSIGN_OR_RETURN(TaskStructOffsets res, ResolveTaskStructStartTimeOffsets());
+  PX_ASSIGN_OR_RETURN(uint64_t exit_code_offset, ResolveTaskStructExitCodeOffset());
   res.exit_code_offset = exit_code_offset;
   return res;
 }

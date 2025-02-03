@@ -14,7 +14,6 @@ import { GraphQLResolveInfo } from 'graphql';
  *******************************/
 export interface GQLQuery {
   noop: boolean;
-  artifacts: GQLArtifactsInfo;
   verifyInviteToken: boolean;
   user: GQLUserInfo;
   org: GQLOrgInfo;
@@ -24,7 +23,6 @@ export interface GQLQuery {
   cluster: GQLClusterInfo;
   clusterByName: GQLClusterInfo;
   clusters: Array<GQLClusterInfo>;
-  cliArtifact: GQLCLIArtifact;
   autocomplete: GQLAutocompleteResult;
   autocompleteField: GQLAutocompleteFieldResult;
   liveViews: Array<GQLLiveViewMetadata>;
@@ -57,6 +55,7 @@ export interface GQLMutation {
   DeleteAPIKey: boolean;
   UpdateUserSettings: GQLUserSettings;
   SetUserAttributes: GQLUserAttributes;
+  DeleteUser: boolean;
   InviteUser: GQLUserInvite;
   UpdateUserPermissions: GQLUserInfo;
   CreateOrg: string;
@@ -68,16 +67,6 @@ export interface GQLMutation {
   UpdateRetentionScript: boolean;
   CreateRetentionScript: string;
   DeleteRetentionScript: boolean;
-}
-
-export interface GQLArtifactsInfo {
-  items: Array<GQLArtifact>;
-}
-
-export interface GQLArtifact {
-  version: string;
-  changelog: string;
-  timestampMs: number;
 }
 
 export interface GQLUserInfo {
@@ -280,20 +269,6 @@ export interface GQLScriptContents {
   contents: string;
 }
 
-export enum GQLArtifactType {
-  AT_UNKNOWN = 'AT_UNKNOWN',
-  AT_LINUX_AMD64 = 'AT_LINUX_AMD64',
-  AT_DARWIN_AMD64 = 'AT_DARWIN_AMD64',
-  AT_CONTAINER_SET_YAMLS = 'AT_CONTAINER_SET_YAMLS',
-  AT_CONTAINER_SET_LINUX_AMD64 = 'AT_CONTAINER_SET_LINUX_AMD64',
-  AT_CONTAINER_SET_TEMPLATE_YAMLS = 'AT_CONTAINER_SET_TEMPLATE_YAMLS'
-}
-
-export interface GQLCLIArtifact {
-  url: string;
-  sha256: string;
-}
-
 export interface GQLEditableUserPermissions {
   isApproved?: boolean;
 }
@@ -400,8 +375,6 @@ export interface GQLEditableRetentionScript {
 export interface GQLResolver {
   Query?: GQLQueryTypeResolver;
   Mutation?: GQLMutationTypeResolver;
-  ArtifactsInfo?: GQLArtifactsInfoTypeResolver;
-  Artifact?: GQLArtifactTypeResolver;
   UserInfo?: GQLUserInfoTypeResolver;
   IDEPath?: GQLIDEPathTypeResolver;
   OrgInfo?: GQLOrgInfoTypeResolver;
@@ -424,7 +397,6 @@ export interface GQLResolver {
   LiveViewContents?: GQLLiveViewContentsTypeResolver;
   ScriptMetadata?: GQLScriptMetadataTypeResolver;
   ScriptContents?: GQLScriptContentsTypeResolver;
-  CLIArtifact?: GQLCLIArtifactTypeResolver;
   Plugin?: GQLPluginTypeResolver;
   PluginConfig?: GQLPluginConfigTypeResolver;
   PluginInfo?: GQLPluginInfoTypeResolver;
@@ -435,7 +407,6 @@ export interface GQLResolver {
 }
 export interface GQLQueryTypeResolver<TParent = any> {
   noop?: QueryToNoopResolver<TParent>;
-  artifacts?: QueryToArtifactsResolver<TParent>;
   verifyInviteToken?: QueryToVerifyInviteTokenResolver<TParent>;
   user?: QueryToUserResolver<TParent>;
   org?: QueryToOrgResolver<TParent>;
@@ -445,7 +416,6 @@ export interface GQLQueryTypeResolver<TParent = any> {
   cluster?: QueryToClusterResolver<TParent>;
   clusterByName?: QueryToClusterByNameResolver<TParent>;
   clusters?: QueryToClustersResolver<TParent>;
-  cliArtifact?: QueryToCliArtifactResolver<TParent>;
   autocomplete?: QueryToAutocompleteResolver<TParent>;
   autocompleteField?: QueryToAutocompleteFieldResolver<TParent>;
   liveViews?: QueryToLiveViewsResolver<TParent>;
@@ -466,13 +436,6 @@ export interface GQLQueryTypeResolver<TParent = any> {
 
 export interface QueryToNoopResolver<TParent = any, TResult = any> {
   (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface QueryToArtifactsArgs {
-  artifactName: string;
-}
-export interface QueryToArtifactsResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: QueryToArtifactsArgs, context: any, info: GraphQLResolveInfo): TResult;
 }
 
 export interface QueryToVerifyInviteTokenArgs {
@@ -518,13 +481,6 @@ export interface QueryToClusterByNameResolver<TParent = any, TResult = any> {
 
 export interface QueryToClustersResolver<TParent = any, TResult = any> {
   (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface QueryToCliArtifactArgs {
-  artifactType: GQLArtifactType;
-}
-export interface QueryToCliArtifactResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: QueryToCliArtifactArgs, context: any, info: GraphQLResolveInfo): TResult;
 }
 
 export interface QueryToAutocompleteArgs {
@@ -640,6 +596,7 @@ export interface GQLMutationTypeResolver<TParent = any> {
   DeleteAPIKey?: MutationToDeleteAPIKeyResolver<TParent>;
   UpdateUserSettings?: MutationToUpdateUserSettingsResolver<TParent>;
   SetUserAttributes?: MutationToSetUserAttributesResolver<TParent>;
+  DeleteUser?: MutationToDeleteUserResolver<TParent>;
   InviteUser?: MutationToInviteUserResolver<TParent>;
   UpdateUserPermissions?: MutationToUpdateUserPermissionsResolver<TParent>;
   CreateOrg?: MutationToCreateOrgResolver<TParent>;
@@ -695,6 +652,10 @@ export interface MutationToSetUserAttributesArgs {
 }
 export interface MutationToSetUserAttributesResolver<TParent = any, TResult = any> {
   (parent: TParent, args: MutationToSetUserAttributesArgs, context: any, info: GraphQLResolveInfo): TResult;
+}
+
+export interface MutationToDeleteUserResolver<TParent = any, TResult = any> {
+  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
 }
 
 export interface MutationToInviteUserArgs {
@@ -780,32 +741,6 @@ export interface MutationToDeleteRetentionScriptArgs {
 }
 export interface MutationToDeleteRetentionScriptResolver<TParent = any, TResult = any> {
   (parent: TParent, args: MutationToDeleteRetentionScriptArgs, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface GQLArtifactsInfoTypeResolver<TParent = any> {
-  items?: ArtifactsInfoToItemsResolver<TParent>;
-}
-
-export interface ArtifactsInfoToItemsResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface GQLArtifactTypeResolver<TParent = any> {
-  version?: ArtifactToVersionResolver<TParent>;
-  changelog?: ArtifactToChangelogResolver<TParent>;
-  timestampMs?: ArtifactToTimestampMsResolver<TParent>;
-}
-
-export interface ArtifactToVersionResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface ArtifactToChangelogResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface ArtifactToTimestampMsResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
 }
 
 export interface GQLUserInfoTypeResolver<TParent = any> {
@@ -1331,19 +1266,6 @@ export interface ScriptContentsToMetadataResolver<TParent = any, TResult = any> 
 }
 
 export interface ScriptContentsToContentsResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface GQLCLIArtifactTypeResolver<TParent = any> {
-  url?: CLIArtifactToUrlResolver<TParent>;
-  sha256?: CLIArtifactToSha256Resolver<TParent>;
-}
-
-export interface CLIArtifactToUrlResolver<TParent = any, TResult = any> {
-  (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
-}
-
-export interface CLIArtifactToSha256Resolver<TParent = any, TResult = any> {
   (parent: TParent, args: {}, context: any, info: GraphQLResolveInfo): TResult;
 }
 

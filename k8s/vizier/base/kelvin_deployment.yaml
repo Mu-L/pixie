@@ -33,25 +33,31 @@ spec:
                 - linux
       initContainers:
       - name: qb-wait
-        image: gcr.io/pixie-oss/pixie-dev-public/curl:1.0
-        # yamllint disable rule:indentation
+        # yamllint disable-line rule:line-length
+        image: ghcr.io/pixie-io/pixie-oss-pixie-dev-public-curl:multiarch-7.87.0@sha256:f7f265d5c64eb4463a43a99b6bf773f9e61a50aaa7cefaf564f43e42549a01dd
         command: ['sh', '-c', 'set -x;
           URL="https://${SERVICE_NAME}:${SERVICE_PORT}/healthz";
           until [ $(curl -m 0.5 -s -o /dev/null -w "%{http_code}" -k ${URL}) -eq 200 ]; do
-            echo "waiting for ${URL}"
+            echo "waiting for ${URL}";
             sleep 2;
           done;
         ']
-        # yamllint enable rule:indentation
         env:
           # The name of the service that Kelvin must connect with before becoming available.
         - name: SERVICE_NAME
           value: "vizier-query-broker-svc"
         - name: SERVICE_PORT
           value: "50300"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
       containers:
       - name: app
-        image: gcr.io/pixie-oss/pixie-dev/vizier/kelvin_image:latest
+        image: vizier-kelvin_image:latest
         envFrom:
         - configMapRef:
             name: pl-tls-config
@@ -87,7 +93,7 @@ spec:
               key: cluster-name
               name: pl-cluster-secrets
               optional: true
-        - name: PL_NAMESPACE
+        - name: PL_POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
@@ -102,6 +108,20 @@ spec:
           mountPath: /sys
           readOnly: true
         resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        runAsUser: 10100
+        runAsGroup: 10100
+        fsGroup: 10100
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       terminationGracePeriodSeconds: 30
       volumes:
       - name: certs

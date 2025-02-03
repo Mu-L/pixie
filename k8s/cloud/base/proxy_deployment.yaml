@@ -15,7 +15,7 @@ spec:
       containers:
       - name: cloud-proxy-server
         imagePullPolicy: IfNotPresent
-        image: gcr.io/pixie-oss/pixie-dev/cloud/proxy_server_image
+        image: cloud-proxy_server_image
         ports:
         - containerPort: 56000
           name: http2
@@ -78,9 +78,27 @@ spec:
         volumeMounts:
         - name: certs
           mountPath: /certs
+        - name: nginx-config
+          mountPath: /usr/local/openresty/nginx/conf.d
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FSETID
+            - FOWNER
+            - MKNOD
+            - SETFCAP
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
       - name: envoy
         imagePullPolicy: IfNotPresent
-        image: envoyproxy/envoy:v1.12.2
+        image: envoyproxy/envoy:v1.12.2@sha256:b36ee021fc4d285de7861dbaee01e7437ce1d63814ead6ae3e4dfcad4a951b2e
         command: ["envoy"]
         args: ["-c", "/etc/envoy.yaml", "--service-cluster", "$(POD_NAME)"]
         env:
@@ -108,6 +126,18 @@ spec:
           subPath: envoy.yaml
         - mountPath: /service-certs
           name: service-certs
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
       - name: service-certs
         secret:
@@ -118,3 +148,6 @@ spec:
       - name: certs
         secret:
           secretName: cloud-proxy-tls-certs
+      - name: nginx-config
+        configMap:
+          name: pl-proxy-nginx-config

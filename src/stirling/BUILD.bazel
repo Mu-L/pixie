@@ -38,6 +38,7 @@ pl_cc_library(
     ),
     visibility = [
         "//src/e2e_test/vizier/planner/dump_schemas:__pkg__",
+        "//src/experimental/standalone_pem:__subpackages__",
         "//src/stirling:__subpackages__",
         "//src/vizier/services/agent:__subpackages__",
     ],
@@ -59,6 +60,7 @@ pl_cc_library(
         "//src/stirling/source_connectors/seq_gen:cc_library",
         "//src/stirling/source_connectors/socket_tracer:cc_library",
         "//src/stirling/source_connectors/stirling_error:cc_library",
+        "//src/stirling/source_connectors/tcp_stats:cc_library",
         "//src/stirling/utils:cc_library",
     ],
 )
@@ -68,9 +70,10 @@ pl_cc_library(
 # Note that each linux header tarball is ~15MB compressed and ~230MB uncompressed.
 # Trimmed versions are ~8MB compressed and ~110MB uncompressed.
 # These are all trimmed versions, so we have 8 * 12 = 96 MB of headers.
-stirling_linux_headers_tarballs = [
-    "@linux_headers_merged_tar_gz//file:file",
-]
+stirling_linux_headers_tarballs = select({
+    "@platforms//cpu:aarch64": ["@linux_headers_merged_arm64_tar_gz//file:file"],
+    "@platforms//cpu:x86_64": ["@linux_headers_merged_x86_64_tar_gz//file:file"],
+})
 
 # Used by stirling runtime to replace the on-the-fly installed Linux headers from
 # stirling_linux_headers_tarballs, in order to match the host's actual configs.

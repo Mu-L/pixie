@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <absl/container/flat_hash_map.h>
 #include <any>
 #include <deque>
 #include <list>
@@ -67,6 +68,7 @@ struct SocketOpen {
   uint64_t timestamp_ns = 0;
   // TODO(yzhao): Consider using std::optional to indicate the address has not been initialized.
   SockAddr remote_addr;
+  SockAddr local_addr;
 };
 
 struct SocketClose {
@@ -259,21 +261,32 @@ class ConnTracker : NotCopyMoveable {
     using TRecordType = typename TProtocolTraits::record_type;
     using TFrameType = typename TProtocolTraits::frame_type;
     using TStateType = typename TProtocolTraits::state_type;
+    using TKey = typename TProtocolTraits::key_type;
 
     InitProtocolState<TStateType>();
 
-    DataStreamsToFrames<TFrameType, TStateType>();
+    DataStreamsToFrames<TKey, TFrameType, TStateType>();
 
-    auto& req_frames = req_data()->Frames<TFrameType>();
-    auto& resp_frames = resp_data()->Frames<TFrameType>();
+    auto& req_frames = req_data()->Frames<TKey, TFrameType>();
+    auto& resp_frames = resp_data()->Frames<TKey, TFrameType>();
     auto state_ptr = protocol_state<TStateType>();
 
     CONN_TRACE(2) << absl::Substitute("req_frames=$0 resp_frames=$1", req_frames.size(),
                                       resp_frames.size());
 
-    protocols::RecordsWithErrorCount<TRecordType> result =
-        protocols::StitchFrames<TRecordType, TFrameType, TStateType>(&req_frames, &resp_frames,
-                                                                     state_ptr);
+    protocols::RecordsWithErrorCount<TRecordType> result;
+
+    // If this protocol doesn't support streams, we call StitchFrames with just the deque.
+    // If it does, we use a map of stream ID to deque.
+    // TODO(@benkilimnik): Eventually, we should migrate all of the protocols to use the map.
+    if constexpr (TProtocolTraits::stream_support ==
+                  protocols::BaseProtocolTraits<TRecordType>::UseStream) {
+      result = protocols::StitchFrames<TRecordType, TKey, TFrameType, TStateType>(
+          &req_frames, &resp_frames, state_ptr);
+    } else {
+      result = protocols::StitchFrames<TRecordType, TFrameType, TStateType>(
+          &req_frames[0], &resp_frames[0], state_ptr);
+    }
 
     CONN_TRACE(2) << absl::Substitute("records=$0", result.records.size());
 
@@ -286,15 +299,15 @@ class ConnTracker : NotCopyMoveable {
    * Returns reference to current set of unconsumed requests.
    * Note: A call to ProcessBytesToFrames() is required to parse new requests.
    */
-  template <typename TFrameType>
-  std::deque<TFrameType>& req_frames() {
-    return req_data()->Frames<TFrameType>();
+  template <typename TKey, typename TFrameType>
+  absl::flat_hash_map<TKey, std::deque<TFrameType>>& req_frames() {
+    return req_data()->Frames<TKey, TFrameType>();
   }
   // TODO(yzhao): req_data() requires role_ to be set. But HTTP2 uprobe tracing does
   // not set that. So send_data() is created. Investigate more unified approach.
-  template <typename TFrameType>
-  const std::deque<TFrameType>& send_frames() const {
-    return send_data_.Frames<TFrameType>();
+  template <typename TKey, typename TFrameType>
+  const absl::flat_hash_map<TKey, std::deque<TFrameType>>& send_frames() const {
+    return send_data_.Frames<TKey, TFrameType>();
   }
 
   size_t http2_client_streams_size() const { return http2_client_streams_.streams().size(); }
@@ -304,13 +317,13 @@ class ConnTracker : NotCopyMoveable {
    * Returns reference to current set of unconsumed responses.
    * Note: A call to ProcessBytesToFrames() is required to parse new responses.
    */
-  template <typename TFrameType>
-  std::deque<TFrameType>& resp_frames() {
-    return resp_data()->Frames<TFrameType>();
+  template <typename TKey, typename TFrameType>
+  absl::flat_hash_map<TKey, std::deque<TFrameType>>& resp_frames() {
+    return resp_data()->Frames<TKey, TFrameType>();
   }
-  template <typename TFrameType>
-  const std::deque<TFrameType>& recv_frames() const {
-    return recv_data_.Frames<TFrameType>();
+  template <typename TKey, typename TFrameType>
+  const absl::flat_hash_map<TKey, std::deque<TFrameType>>& recv_frames() const {
+    return recv_data_.Frames<TKey, TFrameType>();
   }
 
   const conn_id_t& conn_id() const { return conn_id_; }
@@ -323,6 +336,11 @@ class ConnTracker : NotCopyMoveable {
    * Get remote IP endpoint of the connection.
    */
   const SockAddr& remote_endpoint() const { return open_info_.remote_addr; }
+
+  /**
+   * Get local IP endpoint of the connection.
+   */
+  const SockAddr& local_endpoint() const { return open_info_.local_addr; }
 
   /**
    * Get the connection information (e.g. remote IP, port, PID, etc.) for this connection.
@@ -533,13 +551,14 @@ class ConnTracker : NotCopyMoveable {
                std::chrono::time_point<std::chrono::steady_clock> buffer_expiry_timestamp) {
     using TFrameType = typename TProtocolTraits::frame_type;
     using TStateType = typename TProtocolTraits::state_type;
+    using TKey = typename TProtocolTraits::key_type;
 
     if constexpr (std::is_same_v<TFrameType, protocols::http2::Stream>) {
       http2_client_streams_.Cleanup(frame_size_limit_bytes, frame_expiry_timestamp);
       http2_server_streams_.Cleanup(frame_size_limit_bytes, frame_expiry_timestamp);
     } else {
-      send_data_.CleanupFrames<TFrameType>(frame_size_limit_bytes, frame_expiry_timestamp);
-      recv_data_.CleanupFrames<TFrameType>(frame_size_limit_bytes, frame_expiry_timestamp);
+      send_data_.CleanupFrames<TKey, TFrameType>(frame_size_limit_bytes, frame_expiry_timestamp);
+      recv_data_.CleanupFrames<TKey, TFrameType>(frame_size_limit_bytes, frame_expiry_timestamp);
     }
 
     auto* state = protocol_state<TStateType>();
@@ -564,12 +583,13 @@ class ConnTracker : NotCopyMoveable {
   void SetConnID(struct conn_id_t conn_id);
 
   void SetRemoteAddr(const union sockaddr_t addr, std::string_view reason);
+  void SetLocalAddr(const union sockaddr_t addr, std::string_view reason);
 
   // Returns false if the protocol change is disallowed.
   bool SetProtocol(traffic_protocol_t protocol, std::string_view reason);
 
   // Returns false if the protocol change is disallowed.
-  bool SetSSL(bool ssl, std::string_view reason);
+  bool SetSSL(bool ssl, ssl_source_t ssl_source, std::string_view reason);
 
   // Returns true if the state was changed.
   bool SetRole(endpoint_role_t role, std::string_view reason);
@@ -578,11 +598,11 @@ class ConnTracker : NotCopyMoveable {
 
   std::string ToString() const;
 
-  template <typename TFrameType>
+  template <typename TKey, typename TFrameType>
   void InitFrames() {
     if constexpr (!std::is_same_v<TFrameType, protocols::http2::Stream>) {
-      send_data_.InitFrames<TFrameType>();
-      recv_data_.InitFrames<TFrameType>();
+      send_data_.InitFrames<TKey, TFrameType>();
+      recv_data_.InitFrames<TKey, TFrameType>();
     }
   }
 
@@ -592,6 +612,7 @@ class ConnTracker : NotCopyMoveable {
   template <typename TProtocolTraits>
   size_t MemUsage() const {
     using TFrameType = typename TProtocolTraits::frame_type;
+    using TKey = typename TProtocolTraits::key_type;
 
     size_t data_buffer_total = 0;
     data_buffer_total += send_data().data_buffer().capacity();
@@ -603,8 +624,8 @@ class ConnTracker : NotCopyMoveable {
       http2_events_total += http2_client_streams_.StreamsSize();
       http2_events_total += http2_server_streams_.StreamsSize();
     } else {
-      parsed_msg_total += send_data().FramesSize<TFrameType>();
-      parsed_msg_total += recv_data().FramesSize<TFrameType>();
+      parsed_msg_total += send_data().FramesSize<TKey, TFrameType>();
+      parsed_msg_total += recv_data().FramesSize<TKey, TFrameType>();
     }
 
     return data_buffer_total + http2_events_total + parsed_msg_total;
@@ -648,19 +669,19 @@ class ConnTracker : NotCopyMoveable {
 
   void UpdateDataStats(const SocketDataEvent& event);
 
-  template <typename TFrameType, typename TStateType>
+  template <typename TKey, typename TFrameType, typename TStateType>
   void DataStreamsToFrames() {
     auto state_ptr = protocol_state<TStateType>();
 
     DataStream* req_data_ptr = req_data();
     DCHECK_NE(req_data_ptr, nullptr);
-    req_data_ptr->template ProcessBytesToFrames<TFrameType, TStateType>(message_type_t::kRequest,
-                                                                        state_ptr);
+    req_data_ptr->template ProcessBytesToFrames<TKey, TFrameType, TStateType>(
+        message_type_t::kRequest, state_ptr);
 
     DataStream* resp_data_ptr = resp_data();
     DCHECK_NE(resp_data_ptr, nullptr);
-    resp_data_ptr->template ProcessBytesToFrames<TFrameType, TStateType>(message_type_t::kResponse,
-                                                                         state_ptr);
+    resp_data_ptr->template ProcessBytesToFrames<TKey, TFrameType, TStateType>(
+        message_type_t::kResponse, state_ptr);
   }
 
   template <typename TRecordType>
@@ -684,6 +705,7 @@ class ConnTracker : NotCopyMoveable {
   traffic_protocol_t protocol_ = kProtocolUnknown;
   endpoint_role_t role_ = kRoleUnknown;
   bool ssl_ = false;
+  ssl_source_t ssl_source_ = kSSLNone;
   SocketOpen open_info_;
   SocketClose close_info_;
   ConnStatsTracker conn_stats_;
@@ -777,21 +799,24 @@ ConnTracker::ProcessToRecords<protocols::http2::ProtocolTraits>();
 template <typename TProtocolTraits>
 std::string DebugString(const ConnTracker& c, std::string_view prefix) {
   using TFrameType = typename TProtocolTraits::frame_type;
+  using TKey = typename TProtocolTraits::key_type;
 
   std::string info;
   info += absl::Substitute("$0conn_id=$1\n", prefix, ToString(c.conn_id()));
   info += absl::Substitute("state=$0\n", magic_enum::enum_name(c.state()));
   info += absl::Substitute("$0remote_addr=$1:$2\n", prefix, c.remote_endpoint().AddrStr(),
                            c.remote_endpoint().port());
+  info += absl::Substitute("$0local_addr=$1:$2\n", prefix, c.local_endpoint().AddrStr(),
+                           c.local_endpoint().port());
   info += absl::Substitute("$0protocol=$1\n", prefix, magic_enum::enum_name(c.protocol()));
   if constexpr (std::is_same_v<TFrameType, protocols::http2::Stream>) {
     info += c.http2_client_streams_.DebugString(absl::StrCat(prefix, "  "));
     info += c.http2_server_streams_.DebugString(absl::StrCat(prefix, "  "));
   } else {
     info += absl::Substitute("$0recv queue\n", prefix);
-    info += DebugString<TFrameType>(c.recv_data(), absl::StrCat(prefix, "  "));
+    info += DebugString<TKey, TFrameType>(c.recv_data(), absl::StrCat(prefix, "  "));
     info += absl::Substitute("$0send queue\n", prefix);
-    info += DebugString<TFrameType>(c.send_data(), absl::StrCat(prefix, "  "));
+    info += DebugString<TKey, TFrameType>(c.send_data(), absl::StrCat(prefix, "  "));
   }
 
   return info;

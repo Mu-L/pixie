@@ -17,7 +17,7 @@
  */
 
 
-import { PaletteMode } from '@mui/material';
+import { alpha, PaletteMode } from '@mui/material';
 import { createTheme, Theme, type ThemeOptions as OriginalThemeOptions } from '@mui/material/styles';
 import type {
   PaletteOptions as AugmentedPaletteOptions,
@@ -25,6 +25,8 @@ import type {
 } from '@mui/material/styles/createPalette';
 import { Shadows } from '@mui/material/styles/shadows';
 import { deepmerge } from '@mui/utils';
+
+import { COLORS } from 'configurable/theme-colors';
 
 interface SyntaxPalette {
   /** Default color for tokens that don't match any other rules */
@@ -99,7 +101,6 @@ declare module '@mui/material/styles/createPalette' {
       grey3: string;
       grey4: string;
       grey5: string;
-      white: string;
     };
     sideBar: {
       color: string;
@@ -178,7 +179,7 @@ export const scrollbarStyles = (theme: Theme) => {
       width: theme.spacing(2),
       height: theme.spacing(2),
     },
-    '& ::-webkit-scrollbar-track': commonStyle(theme.palette.background.one),
+    '& ::-webkit-scrollbar-track': commonStyle(theme.palette.background.default),
     '& ::-webkit-scrollbar-thumb': commonStyle(theme.palette.foreground.grey2),
     '& ::-webkit-scrollbar-corner': {
       backgroundColor: 'transparent',
@@ -245,23 +246,23 @@ export const COMMON_THEME = {
   },
   palette: {
     sideBar: {
-      color: '#161616',
+      color: COLORS.NEUTRAL[900],
       colorShadow: '#000000',
       colorShadowOpacity: 0.5,
     },
     common: {
       black: '#000000',
-      white: '#ffffff',
+      white: '#FFFFFF',
     },
     primary: {
-      main: '#12d6d6',
-      dark: '#17aaaa',
-      light: '#3ef3f3',
+      main: COLORS.PRIMARY[500],
+      dark: COLORS.PRIMARY[600],
+      light: COLORS.PRIMARY[400],
     },
     secondary: {
-      main: '#24b2ff',
-      dark: '#21a1e7',
-      light: '#79d0ff',
+      main: COLORS.SECONDARY[500],
+      dark: COLORS.SECONDARY[600],
+      light: COLORS.SECONDARY[400],
     },
     action: {
       active: '#a6a8ae', // foreground 1.
@@ -367,7 +368,7 @@ type DeepPartial<T> = T extends object ? {
   [P in keyof T]?: DeepPartial<T[P]>;
 } : T;
 
-function addSyntaxToPalette(base: DeepPartial<AugmentedPaletteOptions>): AugmentedPaletteOptions {
+function augmentPalette(base: DeepPartial<AugmentedPaletteOptions>): AugmentedPaletteOptions {
   const merged: Omit<AugmentedPaletteOptions, 'syntax'> = deepmerge<any>(
     COMMON_THEME.palette,
     base,
@@ -381,14 +382,14 @@ function addSyntaxToPalette(base: DeepPartial<AugmentedPaletteOptions>): Augment
       divider: merged.foreground.three,
       error: (merged.error as Required<SimplePaletteColorOptions>).main,
       boolean: (merged.success as Required<SimplePaletteColorOptions>).main,
-      number: (merged.secondary as Required<SimplePaletteColorOptions>).main,
+      number: (merged.info as Required<SimplePaletteColorOptions>).main,
       string: merged.mode === 'dark' ? merged.graph.ramp[0] : merged.graph.ramp[2],
       nullish: merged.foreground.three,
     },
   };
 }
 
-function getMuiThemeComponents(palette: DeepPartial<AugmentedPaletteOptions>) {
+function augmentComponents(palette: DeepPartial<AugmentedPaletteOptions>) {
   return deepmerge(
     COMMON_THEME.components,
     {
@@ -407,56 +408,55 @@ function getMuiThemeComponents(palette: DeepPartial<AugmentedPaletteOptions>) {
 export const DARK_BASE = {
   palette: {
     mode: 'dark' as const,
-    divider: '#272822',
+    divider: COLORS.NEUTRAL[800],
     foreground: {
-      one: '#b2b5bb',
-      two: '#f2f2f2',
-      three: '#9696a5',
-      grey1: '#4a4c4f',
-      grey2: '#353738',
-      grey3: '#212324',
-      grey4: '#596274',
-      grey5: '#dbdde0',
-      white: '#ffffff',
+      one: COLORS.NEUTRAL[300],
+      two: COLORS.NEUTRAL[200],
+      three: COLORS.NEUTRAL[400],
+      grey1: COLORS.NEUTRAL[500],
+      grey2: COLORS.NEUTRAL[700],
+      grey3: COLORS.NEUTRAL[800],
+      grey4: COLORS.NEUTRAL[400],
+      grey5: COLORS.NEUTRAL[200],
     },
     background: {
-      default: '#121212',
-      paper: '#121212',
-      one: '#121212',
-      two: '#212324',
-      three: '#353535',
-      four: '#161616',
-      five: '#090909',
-      six: '#242424',
+      default: COLORS.NEUTRAL[900],
+      paper: COLORS.NEUTRAL[900],
+      one: COLORS.NEUTRAL[1000],
+      two: COLORS.NEUTRAL[900],
+      three: COLORS.NEUTRAL[850],
+      four: COLORS.NEUTRAL[800],
+      five: COLORS.NEUTRAL[700],
+      six: COLORS.NEUTRAL[600],
     },
     text: {
-      primary: '#e2e5ee',
-      secondary: '#ffffff',
-      disabled: 'rgba(226, 229, 238, 0.7)', // 70% opacity of primary
+      primary: COLORS.NEUTRAL[200],
+      secondary: COLORS.NEUTRAL[100],
+      disabled: alpha(COLORS.NEUTRAL[200], 0.7),
     },
     border: {
-      focused: '1px solid rgba(255, 255, 255, 0.2)',
-      unFocused: '1px solid rgba(255, 255, 255, 0.1)',
+      focused: `1px solid ${alpha(COLORS.NEUTRAL[100], 0.2)}`,
+      unFocused: `1px solid ${alpha(COLORS.NEUTRAL[100], 0.1)}`,
     },
     success: {
-      main: '#00dba6',
-      dark: '#00bd8f',
-      light: '#4dffd4',
+      main: COLORS.SUCCESS[500],
+      dark: COLORS.SUCCESS[600],
+      light: COLORS.SUCCESS[400],
     },
     warning: {
-      main: '#f6a609',
-      dark: '#dc9406',
-      light: '#ffc656',
+      main: COLORS.WARNING[500],
+      dark: COLORS.WARNING[600],
+      light: COLORS.WARNING[400],
     },
-    info: { // Same as secondary
-      main: '#24b2ff',
-      dark: '#21a1e7',
-      light: '#79d0ff',
+    info: {
+      main: COLORS.INFO[500],
+      dark: COLORS.INFO[600],
+      light: COLORS.INFO[400],
     },
     error: {
-      main: '#ff5e6d',
-      dark: '#e54e5c',
-      light: '#ff9fa8',
+      main: COLORS.ERROR[500],
+      dark: COLORS.ERROR[600],
+      light: COLORS.ERROR[400],
     },
     graph: {
       flamegraph: {
@@ -471,7 +471,7 @@ export const DARK_BASE = {
     MuiDivider: {
       styleOverrides: {
         root: {
-          backgroundColor: '#353535', // background three.
+          backgroundColor: COLORS.NEUTRAL[700],
         },
       },
     },
@@ -480,6 +480,9 @@ export const DARK_BASE = {
 
 export const LIGHT_BASE = {
   palette: {
+    primary: {
+      main: COLORS.PRIMARY[550],
+    },
     mode: 'light' as const,
     divider: '#dbdde0',
     foreground: {
@@ -491,17 +494,16 @@ export const LIGHT_BASE = {
       grey3: '#f6f6f6',
       grey4: '#a9adb1',
       grey5: '#000000',
-      white: '#ffffff',
     },
     background: {
       default: '#f6f6f6',
       paper: '#fbfbfb',
-      one: '#fbfbfb',
-      two: '#ffffff',
-      three: '#f5f5f5',
-      four: '#f8f9fa',
-      five: '#fbfcfd',
-      six: '#ffffff',
+      one: '#ffffff',
+      two: '#fbfbfb',
+      three: '#fbfcfd',
+      four: '#ffffff',
+      five: '#f5f5f5',
+      six: '#f8f9fa',
     },
     text: {
       primary: 'rgba(0, 0, 0, 0.87)', // Material default
@@ -513,24 +515,24 @@ export const LIGHT_BASE = {
       unFocused: '1px solid rgba(0, 0, 0, 0.1)',
     },
     success: {
-      main: '#00bd8f',
-      dark: '#4dffd4',
-      light: '#00dba6',
+      main: COLORS.SUCCESS[500],
+      dark: COLORS.SUCCESS[600],
+      light: COLORS.SUCCESS[400],
     },
     warning: {
-      main: '#dc9406',
-      dark: '#ffc656',
-      light: '#f6a609',
+      main: COLORS.WARNING[500],
+      dark: COLORS.WARNING[600],
+      light: COLORS.WARNING[400],
     },
-    info: { // Same as secondary
-      main: '#24b2ff',
-      dark: '#21a1e7',
-      light: '#79d0ff',
+    info: {
+      main: COLORS.INFO[500],
+      dark: COLORS.INFO[600],
+      light: COLORS.INFO[400],
     },
     error: {
-      main: '#e54e5c',
-      dark: '#ff9fa8',
-      light: '#ff5e6d',
+      main: COLORS.ERROR[500],
+      dark: COLORS.ERROR[600],
+      light: COLORS.ERROR[400],
     },
     graph: {
       flamegraph: {
@@ -545,7 +547,7 @@ export const LIGHT_BASE = {
     MuiDivider: {
       styleOverrides: {
         root: {
-          backgroundColor: '#a9adb1', // background three.
+          backgroundColor: '#a9adb1', // foreground three.
         },
       },
     },
@@ -556,8 +558,8 @@ export function createPixieTheme(options: DeepPartial<OriginalThemeOptions>): Th
   const base = options?.palette?.mode === 'light' ? LIGHT_BASE : DARK_BASE;
   const merged: OriginalThemeOptions = deepmerge<any>(COMMON_THEME, base, { clone: true });
   // When a custom theme override is given, we only copy color and shadow information (as we know those are safe)
-  merged.palette = addSyntaxToPalette(deepmerge(merged.palette, options.palette ?? {}, { clone: true }));
-  merged.components = getMuiThemeComponents(merged.palette);
+  merged.palette = augmentPalette(deepmerge(merged.palette, options.palette ?? {}, { clone: true }));
+  merged.components = augmentComponents(merged.palette);
   if (Array.isArray(options.shadows) && options.shadows.length) merged.shadows = options.shadows as Shadows;
   return createTheme(merged);
 }

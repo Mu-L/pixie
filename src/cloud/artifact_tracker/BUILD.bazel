@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary", "pl_go_image")
 
@@ -29,15 +28,11 @@ go_library(
         "//src/cloud/artifact_tracker/artifacttrackerenv",
         "//src/cloud/artifact_tracker/artifacttrackerpb:artifact_tracker_pl_go_proto",
         "//src/cloud/artifact_tracker/controllers",
-        "//src/cloud/artifact_tracker/schema",
-        "//src/cloud/shared/pgmigrate",
+        "//src/shared/artifacts/manifest",
         "//src/shared/services",
         "//src/shared/services/healthz",
-        "//src/shared/services/pg",
         "//src/shared/services/server",
-        "@com_github_golang_migrate_migrate//source/go_bindata",
         "@com_github_googleapis_google_cloud_go_testing//storage/stiface",
-        "@com_github_jmoiron_sqlx//:sqlx",
         "@com_github_sirupsen_logrus//:logrus",
         "@com_github_spf13_pflag//:pflag",
         "@com_github_spf13_viper//:viper",
@@ -61,13 +56,4 @@ pl_go_image(
         "//k8s:__subpackages__",
         "//src/cloud:__subpackages__",
     ],
-)
-
-container_push(
-    name = "push_artifact_tracker_server_image",
-    format = "Docker",
-    image = ":artifact_tracker_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/cloud/artifact_tracker_server_image",
-    tag = "{STABLE_BUILD_TAG}",
 )

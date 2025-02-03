@@ -30,9 +30,25 @@ prometheus::Registry& GetMetricsRegistry();
 // This function should only be called by testing code.
 void TestOnlyResetMetricsRegistry();
 
+// A convenience wrapper to return a counter with the specified name and help message when
+// dimensions aren't known at compile time. This should only be used when dimensional data is
+// very low cardinality.
+inline auto& BuildCounterFamily(const std::string& name, const std::string& help_message) {
+  return prometheus::BuildCounter().Name(name).Help(help_message).Register(GetMetricsRegistry());
+}
+
 // A convenience wrapper to return a counter with the specified name and help message.
 inline auto& BuildCounter(const std::string& name, const std::string& help_message) {
   return prometheus::BuildCounter()
+      .Name(name)
+      .Help(help_message)
+      .Register(GetMetricsRegistry())
+      .Add({{"name", name}});
+}
+
+// A convenience wrapper to return a gauge with the specified name and help message.
+inline auto& BuildGauge(const std::string& name, const std::string& help_message) {
+  return prometheus::BuildGauge()
       .Name(name)
       .Help(help_message)
       .Register(GetMetricsRegistry())

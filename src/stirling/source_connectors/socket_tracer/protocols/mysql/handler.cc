@@ -57,7 +57,7 @@ StatusOr<ParseState> HandleNoResponse(const Packet& req_packet, DequeView<Packet
 }
 
 StatusOr<ParseState> HandleErrMessage(DequeView<Packet> resp_packets, Record* entry) {
-  DCHECK(!resp_packets.empty());
+  CTX_DCHECK(!resp_packets.empty());
   const Packet& packet = resp_packets.front();
 
   // Format of ERR packet:
@@ -80,7 +80,7 @@ StatusOr<ParseState> HandleErrMessage(DequeView<Packet> resp_packets, Record* en
 
   int error_code = utils::LEndianBytesToInt<int, kErrorCodeSize>(packet.msg.substr(kErrorCodePos));
   // TODO(oazizi): Add error code into resp msg.
-  PL_UNUSED(error_code);
+  PX_UNUSED(error_code);
 
   entry->resp.status = RespStatus::kErr;
   entry->resp.timestamp_ns = packet.timestamp_ns;
@@ -95,7 +95,7 @@ StatusOr<ParseState> HandleErrMessage(DequeView<Packet> resp_packets, Record* en
 }
 
 StatusOr<ParseState> HandleOKMessage(DequeView<Packet> resp_packets, Record* entry) {
-  DCHECK(!resp_packets.empty());
+  CTX_DCHECK(!resp_packets.empty());
   const Packet& packet = resp_packets.front();
 
   // Format of OK packet:
@@ -227,7 +227,7 @@ StatusOr<ParseState> HandleResultsetResponse(DequeView<Packet> resp_packets, Rec
   RETURN_NEEDS_MORE_DATA_IF_EMPTY(resp_packets);
   const Packet& last_packet = resp_packets.front();
 
-  DCHECK(isLastPacket(resp_packets.front()));
+  CTX_DCHECK(isLastPacket(resp_packets.front()));
   if (IsErrPacket(resp_packets.front())) {
     return HandleErrMessage(resp_packets, entry);
   }
@@ -419,35 +419,35 @@ Status ProcessStmtExecuteParam(std::string_view msg, size_t* type_offset, size_t
     case ColType::kBit:
     case ColType::kDecimal:
     case ColType::kNewDecimal:
-      PL_RETURN_IF_ERROR(DissectStringParam(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectStringParam(msg, val_offset, &param->value));
       break;
     case ColType::kTiny:
-      PL_RETURN_IF_ERROR(DissectIntParam<1>(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectIntParam<1>(msg, val_offset, &param->value));
       break;
     case ColType::kShort:
     case ColType::kYear:
-      PL_RETURN_IF_ERROR(DissectIntParam<2>(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectIntParam<2>(msg, val_offset, &param->value));
       break;
     case ColType::kLong:
     case ColType::kInt24:
-      PL_RETURN_IF_ERROR(DissectIntParam<4>(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectIntParam<4>(msg, val_offset, &param->value));
       break;
     case ColType::kLongLong:
-      PL_RETURN_IF_ERROR(DissectIntParam<8>(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectIntParam<8>(msg, val_offset, &param->value));
       break;
     case ColType::kFloat:
-      PL_RETURN_IF_ERROR(DissectFloatParam<float>(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectFloatParam<float>(msg, val_offset, &param->value));
       break;
     case ColType::kDouble:
-      PL_RETURN_IF_ERROR(DissectFloatParam<double>(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectFloatParam<double>(msg, val_offset, &param->value));
       break;
     case ColType::kDate:
     case ColType::kDateTime:
     case ColType::kTimestamp:
-      PL_RETURN_IF_ERROR(DissectDateTimeParam(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectDateTimeParam(msg, val_offset, &param->value));
       break;
     case ColType::kTime:
-      PL_RETURN_IF_ERROR(DissectDateTimeParam(msg, val_offset, &param->value));
+      PX_RETURN_IF_ERROR(DissectDateTimeParam(msg, val_offset, &param->value));
       break;
     case ColType::kNull:
       break;
@@ -514,7 +514,7 @@ StatusOr<ParseState> HandleStmtExecuteRequest(const Packet& req_packet,
 
     for (int i = 0; i < num_params; ++i) {
       StmtExecuteParam param;
-      PL_RETURN_IF_ERROR(
+      PX_RETURN_IF_ERROR(
           ProcessStmtExecuteParam(req_packet.msg, &param_type_offset, &param_val_offset, &param));
       params.emplace_back(param);
     }

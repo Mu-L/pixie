@@ -109,7 +109,7 @@ class PacketDecoder {
   StatusOr<std::vector<T>> ExtractRegularArray(StatusOr<T> (PacketDecoder::*extract_func)()) {
     constexpr int kNullSize = -1;
 
-    PL_ASSIGN_OR_RETURN(int32_t len, ExtractInt32());
+    PX_ASSIGN_OR_RETURN(int32_t len, ExtractInt32());
     if (len < kNullSize) {
       return error::Internal("Length of array cannot be negative.");
     }
@@ -119,7 +119,7 @@ class PacketDecoder {
 
     std::vector<T> result;
     for (int i = 0; i < len; ++i) {
-      PL_ASSIGN_OR_RETURN(T tmp, (this->*extract_func)());
+      PX_ASSIGN_OR_RETURN(T tmp, (this->*extract_func)());
       result.push_back(std::move(tmp));
     }
     return result;
@@ -131,7 +131,7 @@ class PacketDecoder {
   // of 0.
   template <typename T>
   StatusOr<std::vector<T>> ExtractCompactArray(StatusOr<T> (PacketDecoder::*extract_func)()) {
-    PL_ASSIGN_OR_RETURN(int32_t len, ExtractUnsignedVarint());
+    PX_ASSIGN_OR_RETURN(int32_t len, ExtractUnsignedVarint());
     if (len < 0) {
       return error::Internal("Length of array cannot be negative.");
     }
@@ -143,7 +143,7 @@ class PacketDecoder {
 
     std::vector<T> result;
     for (int i = 0; i < len; ++i) {
-      PL_ASSIGN_OR_RETURN(T tmp, (this->*extract_func)());
+      PX_ASSIGN_OR_RETURN(T tmp, (this->*extract_func)());
       result.push_back(std::move(tmp));
     }
     return result;
@@ -294,7 +294,7 @@ class PacketDecoder {
   // by a length. This also makes parsing more robust, as it sets boundaries. MarkOffset and
   // JumpToOffset should be used in pairs.
   Status MarkOffset(int32_t len) {
-    DCHECK_GE(len, 0);
+    CTX_DCHECK_GE(len, 0);
     if ((size_t)len > binary_decoder_.Buf().size()) {
       return error::Internal("Not enough bytes in MarkOffset.");
     }
@@ -303,7 +303,7 @@ class PacketDecoder {
   }
 
   Status JumpToOffset() {
-    DCHECK(!marked_bufs_.empty());
+    CTX_DCHECK(!marked_bufs_.empty());
     binary_decoder_.SetBuf(marked_bufs_.top());
     marked_bufs_.pop();
     return Status::OK();

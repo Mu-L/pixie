@@ -4,13 +4,14 @@ kind: ConfigMap
 metadata:
   name: kratos-config
 data:
-  # yamllint disable rule:indentation
   kratos.yml: |
     # All URLS must be set in the environment variables instead of config.
     selfservice:
       methods:
         password:
           enabled: true
+          config:
+            haveibeenpwned_enabled: false
         link:
           enabled: true
       flows:

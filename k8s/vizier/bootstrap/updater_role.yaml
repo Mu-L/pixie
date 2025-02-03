@@ -5,63 +5,113 @@ metadata:
   name: pl-updater-service-account
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: pl-updater-cluster-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: pl-updater-role
-subjects:
-- kind: ServiceAccount
-  name: pl-updater-service-account
-  namespace: "{{ .Release.Namespace }}"
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: pl-updater-cluster-role
-rules:
-# Allow actions on Kubernetes objects
-- apiGroups:
-  - rbac.authorization.k8s.io
-  - etcd.database.coreos.com
-  - nats.io
-  resources:
-  - clusterroles
-  - clusterrolebindings
-  - persistentvolumes
-  - etcdclusters
-  - natsclusters
-  verbs: ["*"]
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: pl-updater-role
 rules:
 - apiGroups:
   - ""
-  - apps
-  - rbac.authorization.k8s.io
-  - extensions
-  - batch
-  - policy
   resources:
   - configmaps
   - secrets
   - pods
   - services
+  - persistentvolumes
+  - persistentvolumeclaims
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  - pods/log
+  verbs:
+  - get
+  - watch
+  - list
+- apiGroups:
+  - apps
+  resources:
   - deployments
   - daemonsets
-  - persistentvolumes
-  - roles
-  - rolebindings
-  - serviceaccounts
   - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
   - cronjobs
   - jobs
-  verbs: ["*"]
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  resourceNames:
+  - cloud-conn-election
+  - metadata-election
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+- apiGroups:
+  - px.dev
+  resources:
+  - viziers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - px.dev
+  resources:
+  - viziers/status
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -74,4 +124,65 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: pl-updater-service-account
-  namespace: "{{ .Release.Namespace }}"
+  namespace: pl
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pl-updater-cluster-role
+rules:
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - clusterrolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  resourceNames:
+  - kube-system
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  - services
+  - endpoints
+  - namespaces
+  verbs:
+  - get
+  - watch
+  - list
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  - deployments
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pl-updater-cluster-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pl-updater-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: pl-updater-service-account
+  namespace: pl

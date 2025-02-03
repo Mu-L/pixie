@@ -34,7 +34,10 @@ static constexpr DataElement kMuxElements[] = {
         canonical_data_elements::kUPID,
         canonical_data_elements::kRemoteAddr,
         canonical_data_elements::kRemotePort,
+        canonical_data_elements::kLocalAddr,
+        canonical_data_elements::kLocalPort,
         canonical_data_elements::kTraceRole,
+        canonical_data_elements::kEncrypted,
         {"req_type", "Mux message request type",
          types::DataType::INT64,
          types::SemanticType::ST_NONE,
@@ -57,6 +60,7 @@ DEFINE_PRINT_TABLE(Mux)
 
 static constexpr int kMuxUPIDIdx = kMuxTable.ColIndex("upid");
 static constexpr int kMuxReqTypeIdx = kMuxTable.ColIndex("req_type");
+static constexpr int kMuxEncryptedIdx = kMuxTable.ColIndex("encrypted");
 
 }  // namespace stirling
 }  // namespace px

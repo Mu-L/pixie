@@ -18,6 +18,8 @@ load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@com_github_bazelbuild_buildtools//buildifier:def.bzl", "buildifier")
 load("@io_bazel_rules_docker//container:container.bzl", "container_image")
 load("//bazel:repositories.bzl", "list_pl_deps")
+load("//bazel/cc_toolchains:llvm_libs.bzl", "llvm_variant_repo_name", "llvm_variant_setting_label", "llvm_variants")
+load("//bazel/cc_toolchains/sysroots:images.bzl", "sysroot_runtime_image", "sysroot_test_image")
 load("//bazel/external/ubuntu_packages:packages.bzl", "packages")
 
 licenses(["restricted"])
@@ -105,8 +107,8 @@ gazelle(
 # gazelle:resolve go px.dev/pixie/src/carnot/goplanner //src/carnot/goplanner:go_default_library
 # gazelle:resolve go px.dev/pixie/src/e2e_test/vizier/planner/dump_schemas/godumpschemas //src/e2e_test/vizier/planner/dump_schemas/godumpschemas:godumpschemas
 
-# gazelle:map_kind go_binary pl_go_binary //bazel:pl_build_system.bzl
-# gazelle:map_kind go_test pl_go_test //bazel:pl_build_system.bzl
+# gazelle:map_kind go_binary pl_go_binary @px//bazel:pl_build_system.bzl
+# gazelle:map_kind go_test pl_go_test @px//bazel:pl_build_system.bzl
 
 buildifier(
     name = "buildifier",
@@ -141,16 +143,32 @@ filegroup(
 )
 
 container_image(
-    name = "pl_go_base_image",
+    name = "pl_go_base_image_default",
+    base = "@base_image//image",
+    debs = pl_cc_base_packages,
+)
+
+container_image(
+    name = "pl_cc_base_image_default",
     base = "@base_image//image",
     debs = pl_cc_base_packages,
     visibility = ["//visibility:public"],
 )
 
+sysroot_runtime_image(
+    name = "pl_go_base_image",
+    default_image = ":pl_go_base_image_default",
+    visibility = ["//visibility:public"],
+)
+
+sysroot_runtime_image(
+    name = "pl_cc_base_image_no_extra_files",
+    default_image = ":pl_cc_base_image_default",
+)
+
 container_image(
     name = "pl_cc_base_image",
-    base = "@base_image//image",
-    debs = pl_cc_base_packages,
+    base = ":pl_cc_base_image_no_extra_files",
     files = [
         "//:embedding.proto",
         "//:sentencepiece.proto",
@@ -159,9 +177,20 @@ container_image(
 )
 
 container_image(
-    name = "pl_cc_base_debug_image",
+    name = "pl_cc_base_debug_image_default",
     base = "@base_image_debug//image",
     debs = pl_cc_base_packages,
+    visibility = ["//visibility:public"],
+)
+
+sysroot_test_image(
+    name = "pl_cc_base_debug_image_no_extra_files",
+    default_image = ":pl_cc_base_debug_image_default",
+)
+
+container_image(
+    name = "pl_cc_base_debug_image",
+    base = ":pl_cc_base_debug_image_no_extra_files",
     files = [
         "//:embedding.proto",
         "//:sentencepiece.proto",
@@ -172,8 +201,8 @@ container_image(
 alias(
     name = "llvm",
     actual = select({
-        "//bazel:use_libcpp": "@com_llvm_lib_libcpp//:llvm",
-        "//conditions:default": "@com_llvm_lib//:llvm",
+        llvm_variant_setting_label(variant): "@{repo}//:llvm".format(repo = llvm_variant_repo_name(variant))
+        for variant in llvm_variants()
     }),
     visibility = ["//visibility:public"],
 )

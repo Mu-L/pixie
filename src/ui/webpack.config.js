@@ -45,9 +45,7 @@ const plugins = [
         android: false,
         appleIcon: false,
         appleStartup: false,
-        coast: false,
         favicons: true,
-        firefox: false,
         windows: false,
         yandex: false
       }
@@ -61,9 +59,7 @@ const plugins = [
     filename: 'index.html',
   }),
   new webpack.EnvironmentPlugin({
-    STABLE_BUILD_NUMBER: '0',
-    STABLE_BUILD_SCM_REVISION: '0000000',
-    STABLE_BUILD_SCM_STATUS: 'Modified',
+    STABLE_BUILD_TAG: '0.1.0',
     BUILD_TIMESTAMP: '0',
   }),
   new webpack.ContextReplacementPlugin(
@@ -306,6 +302,7 @@ module.exports = (env, argv) => {
       __CONFIG_LD_CLIENT_ID__: JSON.stringify(yamls.ld.data.PL_LD_CLIENT_ID),
       __CONFIG_SCRIPT_BUNDLE_URLS__: JSON.stringify(yamls.scriptBundle.data.SCRIPT_BUNDLE_URLS),
       __CONFIG_SCRIPT_BUNDLE_DEV__: JSON.parse(yamls.scriptBundle.data.SCRIPT_BUNDLE_DEV),
+      __CONFIG_SCRIPT_MODIFICATION_DISABLED__: JSON.parse(yamls.scriptBundle.data.PL_SCRIPT_MODIFICATION_DISABLED),
       __SEGMENT_ANALYTICS_JS_DOMAIN__: `"segment.${yamls.domain.data.PL_DOMAIN_NAME}"`,
     }),
   );

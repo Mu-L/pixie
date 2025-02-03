@@ -45,6 +45,7 @@
 DECLARE_bool(stirling_rescan_for_dlopen);
 DECLARE_bool(stirling_enable_grpc_c_tracing);
 DECLARE_double(stirling_rescan_exp_backoff_factor);
+DECLARE_bool(stirling_trace_static_tls_binaries);
 
 namespace px {
 namespace stirling {
@@ -60,52 +61,16 @@ struct UProbeTmpl {
   bpf_tools::BPFProbeAttachType attach_type = bpf_tools::BPFProbeAttachType::kEntry;
 };
 
-// A wrapper around BPF maps that are exclusively written by user-space.
-// Provides an optimized RemoveValue() interface that avoids the BPF access
-// if the key doesn't exist.
-template <typename TKeyType, typename TValueType,
-          typename TMapType = ebpf::BPFHashTable<TKeyType, TValueType>>
-class UserSpaceManagedBPFMap {
- public:
-  static std::unique_ptr<UserSpaceManagedBPFMap> Create(bpf_tools::BCCWrapper* bcc,
-                                                        const std::string& map_name) {
-    return std::unique_ptr<UserSpaceManagedBPFMap>(new UserSpaceManagedBPFMap(bcc, map_name));
-  }
-
-  void UpdateValue(TKeyType key, TValueType value) {
-    ebpf::StatusTuple s = map_->update_value(key, value);
-    if (s.ok()) {
-      shadow_keys_.insert(key);
-    } else {
-      LOG(WARNING) << absl::StrCat("Could not update BPF map. Message=", s.msg());
-    }
-  }
-
-  void RemoveValue(TKeyType key) {
-    if (shadow_keys_.contains(key)) {
-      map_->remove_value(key);
-      shadow_keys_.erase(key);
-    }
-  }
-
- private:
-  UserSpaceManagedBPFMap(bpf_tools::BCCWrapper* bcc, const std::string& map_name) {
-    if constexpr (std::is_same_v<TMapType, ebpf::BPFMapInMapTable<TKeyType>>) {
-      map_ = std::make_unique<TMapType>(bcc->GetMapInMapTable<TKeyType>(map_name));
-    } else {
-      map_ = std::make_unique<TMapType>(bcc->GetHashTable<TKeyType, TValueType>(map_name));
-    }
-  }
-
-  std::unique_ptr<TMapType> map_;
-  absl::flat_hash_set<TKeyType> shadow_keys_;
-};
+using px::stirling::bpf_tools::WrappedBCCMap;
 
 /**
  * UProbeManager manages the deploying of all uprobes on behalf of the SocketTracer.
  * This includes: OpenSSL uprobes, GoTLS uprobes and Go HTTP2 uprobes.
  */
 class UProbeManager {
+  template <typename V>
+  using MapT = WrappedBCCMap<uint32_t, V, /* user space managed */ true>;
+
  public:
   /**
    * Construct a UProbeManager.
@@ -115,10 +80,13 @@ class UProbeManager {
 
   /**
    * Mandatory initialization step before RunDeployUprobesThread can be called.
+   * @param disable_go_tls_tracing Whether to disable Go TLS tracing. Implies enable_http2_tracing
+   * is false.
    * @param enable_http2_tracing Whether to enable HTTP2 tracing.
    * @param disable_self_tracing Whether to enable uprobe deployment on Stirling itself.
    */
-  void Init(bool enable_http2_tracing, bool disable_self_tracing = true);
+  void Init(bool disable_go_tls_tracing, bool enable_http2_tracing,
+            bool disable_self_tracing = true);
 
   /**
    * Notify uprobe manager of an mmap event. An mmap may be indicative of a dlopen,
@@ -450,6 +418,37 @@ class UProbeManager {
           .attach_type = bpf_tools::BPFProbeAttachType::kReturn,
           .probe_fn = "probe_ret_SSL_read",
       },
+      // The _ex variants are declared optional since they were not available
+      // prior to OpenSSL 1.1.1 and may not be available for statically linked
+      // applications (NodeJS).
+      bpf_tools::UProbeSpec{
+          .binary_path = "/usr/lib/x86_64-linux-gnu/libssl.so.1.1",
+          .symbol = "SSL_write_ex",
+          .attach_type = bpf_tools::BPFProbeAttachType::kEntry,
+          .probe_fn = "probe_entry_SSL_write_ex",
+          .is_optional = true,
+      },
+      bpf_tools::UProbeSpec{
+          .binary_path = "/usr/lib/x86_64-linux-gnu/libssl.so.1.1",
+          .symbol = "SSL_write_ex",
+          .attach_type = bpf_tools::BPFProbeAttachType::kReturn,
+          .probe_fn = "probe_ret_SSL_write_ex",
+          .is_optional = true,
+      },
+      bpf_tools::UProbeSpec{
+          .binary_path = "/usr/lib/x86_64-linux-gnu/libssl.so.1.1",
+          .symbol = "SSL_read_ex",
+          .attach_type = bpf_tools::BPFProbeAttachType::kEntry,
+          .probe_fn = "probe_entry_SSL_read_ex",
+          .is_optional = true,
+      },
+      bpf_tools::UProbeSpec{
+          .binary_path = "/usr/lib/x86_64-linux-gnu/libssl.so.1.1",
+          .symbol = "SSL_read_ex",
+          .attach_type = bpf_tools::BPFProbeAttachType::kReturn,
+          .probe_fn = "probe_ret_SSL_read_ex",
+          .is_optional = true,
+      },
       // Used by node tracing to record the mapping from SSL object to TLSWrap object.
       // TODO(yzhao): Move this to a separate list for node application only.
       bpf_tools::UProbeSpec{
@@ -539,7 +538,21 @@ class UProbeManager {
    * @return The number of uprobes deployed. It is not an error if the binary
    * does not use OpenSSL; instead the return value will be zero.
    */
-  StatusOr<int> AttachNodeJsOpenSSLUprobes(uint32_t pid);
+  StatusOr<int> AttachNodeJsOpenSSLUprobes(uint32_t pid, const std::filesystem::path& binary_path);
+
+  /**
+   * Attaches the required probes for TLS tracing to the specified PID if the binary is
+   * statically linked with the necessary OpenSSL compatible symbols. This will only capture
+   * data if the binary uses the OpenSSL API in a BIO native way -- where OpenSSL IO primitives
+   * are used rather than just its encryption functionality.
+   *
+   * @param pid The PID of the process whose binary is examined for OpenSSL symbols statically
+   * linked.
+   * @return The number of uprobes deployed. It is not an error if the binary
+   *         does not contain the necessary symbols to probe; instead the return value will be zero.
+   */
+  StatusOr<int> AttachOpenSSLUProbesOnStaticBinary(uint32_t pid,
+                                                   const std::filesystem::path& binary_path);
 
   /**
    * Calls BCCWrapper.AttachUProbe() with a probe template and log any errors to the probe status
@@ -587,6 +600,10 @@ class UProbeManager {
   // Whether to try to uprobe ourself (e.g. for OpenSSL). Typically, we don't want to do that.
   bool cfg_disable_self_probing_;
 
+  // Whether we want to enable Go TLS tracing. When true, it implies cfg_enable_http2_tracing_ is
+  // false.
+  bool cfg_disable_go_tls_tracing_;
+
   // Whether we want to enable HTTP2 tracing. When false, we don't deploy HTTP2 uprobes.
   bool cfg_enable_http2_tracing_;
 
@@ -612,6 +629,7 @@ class UProbeManager {
   //               Without clean-up, these could consume more-and-more memory.
   absl::flat_hash_set<std::string> openssl_probed_binaries_;
   absl::flat_hash_set<std::string> scanned_binaries_;
+  absl::flat_hash_set<std::string> uprobe_opt_out_;
   absl::flat_hash_set<std::string> go_probed_binaries_;
   absl::flat_hash_set<std::string> go_http2_probed_binaries_;
   absl::flat_hash_set<std::string> go_tls_probed_binaries_;
@@ -619,17 +637,14 @@ class UProbeManager {
   absl::flat_hash_set<std::string> grpc_c_probed_binaries_;
 
   // BPF maps through which the addresses of symbols for a given pid are communicated to uprobes.
-  std::unique_ptr<UserSpaceManagedBPFMap<uint32_t, struct openssl_symaddrs_t>>
-      openssl_symaddrs_map_;
-  std::unique_ptr<UserSpaceManagedBPFMap<uint32_t, struct go_common_symaddrs_t>>
-      go_common_symaddrs_map_;
-  std::unique_ptr<UserSpaceManagedBPFMap<uint32_t, struct go_http2_symaddrs_t>>
-      go_http2_symaddrs_map_;
-  std::unique_ptr<UserSpaceManagedBPFMap<uint32_t, struct go_tls_symaddrs_t>> go_tls_symaddrs_map_;
-  std::unique_ptr<UserSpaceManagedBPFMap<uint32_t, struct node_tlswrap_symaddrs_t>>
-      node_tlswrap_symaddrs_map_;
+  std::unique_ptr<MapT<ssl_source_t>> openssl_source_map_;
+  std::unique_ptr<MapT<struct openssl_symaddrs_t>> openssl_symaddrs_map_;
+  std::unique_ptr<MapT<struct go_common_symaddrs_t>> go_common_symaddrs_map_;
+  std::unique_ptr<MapT<struct go_http2_symaddrs_t>> go_http2_symaddrs_map_;
+  std::unique_ptr<MapT<struct go_tls_symaddrs_t>> go_tls_symaddrs_map_;
+  std::unique_ptr<MapT<struct node_tlswrap_symaddrs_t>> node_tlswrap_symaddrs_map_;
   // Key is python gRPC module's md5 hash, value is the corresponding version enum's numeric value.
-  std::unique_ptr<UserSpaceManagedBPFMap<uint32_t, uint64_t>> grpc_c_versions_map_;
+  std::unique_ptr<MapT<uint64_t>> grpc_c_versions_map_;
 
   const system::Config& syscfg_ = system::Config::GetInstance();
   StirlingMonitor& monitor_ = *StirlingMonitor::GetInstance();

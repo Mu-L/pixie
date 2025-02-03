@@ -15,15 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@com_github_fmeum_rules_meta//meta:defs.bzl", "meta")
-
-cc_static_musl_binary = meta.wrap_with_transition(
-    native.cc_binary,
-    {
-        "@//bazel/cc_toolchains:compiler": meta.replace_with("gcc"),
-        "@//bazel/cc_toolchains:libc_version": meta.replace_with("static_musl"),
-    },
-    executable = True,
-)
+load("//bazel/test_runners/qemu_with_kernel:runner.bzl", "qemu_with_kernel_interactive_runner")
 
 java_graal_binary = meta.wrap_with_transition(
     native.java_binary,
@@ -37,6 +29,14 @@ cc_clang_binary = meta.wrap_with_transition(
     native.cc_binary,
     {
         "@//bazel/cc_toolchains:compiler": meta.replace_with("clang"),
+    },
+    executable = True,
+)
+
+qemu_interactive_runner = meta.wrap_with_transition(
+    qemu_with_kernel_interactive_runner,
+    {
+        "@//bazel/cc_toolchains:libc_version": meta.replace_with("glibc2_36"),
     },
     executable = True,
 )

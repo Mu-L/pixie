@@ -19,265 +19,208 @@
 package k8smeta
 
 import (
-	"context"
-	"time"
-
 	log "github.com/sirupsen/logrus"
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
 	"px.dev/pixie/src/shared/k8s"
 	"px.dev/pixie/src/vizier/services/metadata/storepb"
 )
 
-type informerWatcher struct {
-	convert func(obj interface{}) *K8sResourceMessage
-	objType string
-	ch      chan *K8sResourceMessage
-	inf     cache.SharedIndexInformer
-}
-
-func (i *informerWatcher) send(msg *K8sResourceMessage, et watch.EventType) {
-	msg.ObjectType = i.objType
-	msg.EventType = et
-
-	i.ch <- msg
-}
-
-// StartWatcher starts a watcher.
-func (i *informerWatcher) StartWatcher(quitCh chan struct{}) {
-	i.inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+func createHandlers(convert func(obj interface{}) *K8sResourceMessage, ch chan *K8sResourceMessage) cache.ResourceEventHandler {
+	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			msg := i.convert(obj)
+			msg := convert(obj)
 			if msg != nil {
-				i.send(msg, watch.Added)
+				msg.EventType = watch.Added
+				ch <- msg
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			msg := i.convert(newObj)
+			msg := convert(newObj)
 			if msg != nil {
-				i.send(msg, watch.Modified)
+				msg.EventType = watch.Modified
+				ch <- msg
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
-			msg := i.convert(obj)
+			msg := convert(obj)
 			if msg != nil {
-				i.send(msg, watch.Deleted)
+				msg.EventType = watch.Deleted
+				ch <- msg
 			}
 		},
-	})
-	i.inf.Run(quitCh)
+	}
 }
 
-func podWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	iw := &informerWatcher{
-		convert: podConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Core().V1().Pods().Informer(),
-	}
-	// We initialize ch with the current nodes to handle cold start race conditions.
-	list, err := clientset.CoreV1().Pods(v1.NamespaceAll).List(context.Background(), metav1.ListOptions{})
+func startNodeWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factory informers.SharedInformerFactory) {
+	nodes := factory.Core().V1().Nodes()
+
+	inf := nodes.Informer()
+	_, _ = inf.AddEventHandler(createHandlers(nodeConverter, ch))
+	go inf.Run(quitCh)
+
+	cache.WaitForCacheSync(quitCh, inf.HasSynced)
+
+	// A cache sync doesn't guarantee that the handlers have been called,
+	// so instead we manually list and call the Add handlers since subsequent
+	// resources depend on these.
+	list, err := nodes.Lister().List(labels.Everything())
 	if err != nil {
-		log.WithError(err).Errorf("Failed to init %s", resource)
-		// Still return the informer because the rest of the system can recover from this.
-		return iw
+		log.WithError(err).Errorf("Failed to init nodes")
 	}
 
-	for _, obj := range list.Items {
-		item := obj
-		msg := iw.convert(&item)
+	for i := range list {
+		msg := nodeConverter(list[i])
 		if msg != nil {
-			iw.send(msg, watch.Added)
+			msg.EventType = watch.Added
+			ch <- msg
 		}
 	}
-
-	return iw
 }
 
-func serviceWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	return &informerWatcher{
-		convert: serviceConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Core().V1().Services().Informer(),
-	}
+func startNamespaceWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factory informers.SharedInformerFactory) {
+	inf := factory.Core().V1().Namespaces().Informer()
+	_, _ = inf.AddEventHandler(createHandlers(namespaceConverter, ch))
+	go inf.Run(quitCh)
 }
 
-func namespaceWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	return &informerWatcher{
-		convert: namespaceConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Core().V1().Namespaces().Informer(),
-	}
-}
+func startPodWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factories []informers.SharedInformerFactory) {
+	for _, factory := range factories {
+		pods := factory.Core().V1().Pods()
 
-func endpointsWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	return &informerWatcher{
-		convert: endpointsConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Core().V1().Endpoints().Informer(),
-	}
-}
+		inf := pods.Informer()
+		_, _ = inf.AddEventHandler(createHandlers(podConverter, ch))
+		go inf.Run(quitCh)
 
-func nodeWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	iw := &informerWatcher{
-		convert: nodeConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Core().V1().Nodes().Informer(),
-	}
+		cache.WaitForCacheSync(quitCh, inf.HasSynced)
 
-	// We initialize ch with the current nodes to handle cold start race conditions.
-	list, err := clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		log.WithError(err).Errorf("Failed to init %s", resource)
-		// Still return the informer because the rest of the system can recover from this.
-		return iw
-	}
+		// A cache sync doesn't guarantee that the handlers have been called,
+		// so instead we manually list and call the Add handlers since subsequent
+		// resources depend on these.
+		list, err := pods.Lister().List(labels.Everything())
+		if err != nil {
+			log.WithError(err).Errorf("Failed to init pods")
+		}
 
-	for _, obj := range list.Items {
-		item := obj
-		msg := iw.convert(&item)
-		if msg != nil {
-			iw.send(msg, watch.Added)
+		for i := range list {
+			msg := podConverter(list[i])
+			if msg != nil {
+				msg.EventType = watch.Added
+				ch <- msg
+			}
 		}
 	}
-	return iw
 }
 
-func replicaSetWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	return &informerWatcher{
-		convert: replicaSetConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Apps().V1().ReplicaSets().Informer(),
+func startServiceWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factories []informers.SharedInformerFactory) {
+	for _, factory := range factories {
+		inf := factory.Core().V1().Services().Informer()
+		_, _ = inf.AddEventHandler(createHandlers(serviceConverter, ch))
+		go inf.Run(quitCh)
 	}
 }
 
-func deploymentWatcher(resource string, ch chan *K8sResourceMessage, clientset *kubernetes.Clientset) *informerWatcher {
-	factory := informers.NewSharedInformerFactory(clientset, 12*time.Hour)
-	return &informerWatcher{
-		convert: deploymentConverter,
-		objType: resource,
-		ch:      ch,
-		inf:     factory.Apps().V1().Deployments().Informer(),
+func startEndpointsWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factories []informers.SharedInformerFactory) {
+	for _, factory := range factories {
+		inf := factory.Core().V1().Endpoints().Informer()
+		_, _ = inf.AddEventHandler(createHandlers(endpointsConverter, ch))
+		go inf.Run(quitCh)
+	}
+}
+
+func startReplicaSetWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factories []informers.SharedInformerFactory) {
+	for _, factory := range factories {
+		inf := factory.Apps().V1().ReplicaSets().Informer()
+		_, _ = inf.AddEventHandler(createHandlers(replicaSetConverter, ch))
+		go inf.Run(quitCh)
+	}
+}
+
+func startDeploymentWatcher(ch chan *K8sResourceMessage, quitCh <-chan struct{}, factories []informers.SharedInformerFactory) {
+	for _, factory := range factories {
+		inf := factory.Apps().V1().Deployments().Informer()
+		_, _ = inf.AddEventHandler(createHandlers(deploymentConverter, ch))
+		go inf.Run(quitCh)
 	}
 }
 
 func podConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*v1.Pod)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "pods",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_Pod{
-				Pod: k8s.PodToProto(o),
+				Pod: k8s.PodToProto(obj.(*v1.Pod)),
 			},
 		},
 	}
 }
 
 func serviceConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*v1.Service)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "services",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_Service{
-				Service: k8s.ServiceToProto(o),
+				Service: k8s.ServiceToProto(obj.(*v1.Service)),
 			},
 		},
 	}
 }
 
 func namespaceConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*v1.Namespace)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "namespaces",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_Namespace{
-				Namespace: k8s.NamespaceToProto(o),
+				Namespace: k8s.NamespaceToProto(obj.(*v1.Namespace)),
 			},
 		},
 	}
 }
 
 func endpointsConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*v1.Endpoints)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "endpoints",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_Endpoints{
-				Endpoints: k8s.EndpointsToProto(o),
+				Endpoints: k8s.EndpointsToProto(obj.(*v1.Endpoints)),
 			},
 		},
 	}
 }
 
 func nodeConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*v1.Node)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "nodes",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_Node{
-				Node: k8s.NodeToProto(o),
+				Node: k8s.NodeToProto(obj.(*v1.Node)),
 			},
 		},
 	}
 }
 
 func replicaSetConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*apps.ReplicaSet)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "replicasets",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_ReplicaSet{
-				ReplicaSet: k8s.ReplicaSetToProto(o),
+				ReplicaSet: k8s.ReplicaSetToProto(obj.(*apps.ReplicaSet)),
 			},
 		},
 	}
 }
 
 func deploymentConverter(obj interface{}) *K8sResourceMessage {
-	o, ok := obj.(*apps.Deployment)
-	if !ok {
-		return nil
-	}
-
 	return &K8sResourceMessage{
+		ObjectType: "deployments",
 		Object: &storepb.K8SResource{
 			Resource: &storepb.K8SResource_Deployment{
-				Deployment: k8s.DeploymentToProto(o),
+				Deployment: k8s.DeploymentToProto(obj.(*apps.Deployment)),
 			},
 		},
 	}

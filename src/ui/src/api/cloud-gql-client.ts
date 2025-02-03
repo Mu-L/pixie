@@ -32,8 +32,8 @@ import { CachePersistor } from 'apollo3-cache-persist';
 import fetch from 'cross-fetch';
 
 import { isPixieEmbedded } from 'app/common/embed-context';
+import { GetCSRFCookie } from 'app/pages/auth/utils';
 
-import { GetCSRFCookie } from '../pages/auth/utils';
 import { PixieAPIClientOptions } from './api-options';
 
 // Apollo link that adds cookies in the request.

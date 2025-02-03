@@ -31,6 +31,7 @@
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/util/delimited_message_util.h>
 #include <magic_enum.hpp>
+#include "src/common/system/kernel_version.h"
 
 #include "src/common/base/base.h"
 #include "src/common/base/utils.h"
@@ -78,28 +79,48 @@ DEFINE_string(socket_trace_data_events_output_path, "",
 // Due to BPF instruction limits (< 4096 instructions) on kernels older than
 // 5.2, we can't simultaneously enable all protocols. Thus, some protocols
 // are only enabled on newer kernels.
-DEFINE_int32(stirling_enable_http_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_http_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_HTTP_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process HTTP messages");
-DEFINE_int32(stirling_enable_http2_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_http2_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_HTTP2_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process gRPC RPCs.");
-DEFINE_int32(stirling_enable_mysql_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_mysql_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_MYSQL_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process MySQL messages.");
-DEFINE_int32(stirling_enable_pgsql_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_pgsql_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_PGSQL_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process PostgreSQL messages.");
-DEFINE_int32(stirling_enable_cass_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_cass_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_CASS_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process Cassandra messages.");
-DEFINE_int32(stirling_enable_dns_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_dns_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_DNS_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process DNS messages.");
-DEFINE_int32(stirling_enable_redis_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_redis_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_REDIS_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process Redis messages.");
-DEFINE_int32(stirling_enable_nats_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_nats_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_NATS_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process NATS messages.");
-DEFINE_int32(stirling_enable_kafka_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_kafka_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_KAFKA_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process Kafka messages.");
-DEFINE_int32(stirling_enable_mux_tracing, px::stirling::TraceMode::OnForNewerKernel,
+DEFINE_int32(stirling_enable_mux_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_MUX_TRACING",
+                                  px::stirling::TraceMode::OnForNewerKernel),
              "If true, stirling will trace and process Mux messages.");
-DEFINE_int32(stirling_enable_amqp_tracing, px::stirling::TraceMode::On,
+DEFINE_int32(stirling_enable_amqp_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_AMQP_TRACING", px::stirling::TraceMode::On),
              "If true, stirling will trace and process AMQP messages.");
+DEFINE_int32(stirling_enable_mongodb_tracing,
+             gflags::Int32FromEnv("PX_STIRLING_ENABLE_MONGODB_TRACING",
+                                  px::stirling::TraceMode::OnForNewerKernel),
+             "If true, stirling will trace and process MongoDB messages");
+DEFINE_bool(stirling_disable_golang_tls_tracing,
+            gflags::BoolFromEnv("PX_STIRLING_DISABLE_GOLANG_TLS_TRACING", false),
+            "If true, stirling will not trace TLS traffic for Go applications. This implies "
+            "stirling_enable_http2_tracing=false.");
 
 DEFINE_bool(stirling_disable_self_tracing, true,
             "If true, stirling will not trace and process syscalls made by itself.");
@@ -147,11 +168,29 @@ DEFINE_uint32(datastream_buffer_retention_size,
 DEFINE_uint64(max_body_bytes, gflags::Uint64FromEnv("PL_STIRLING_MAX_BODY_BYTES", 512),
               "The maximum number of bytes in the body of protocols like HTTP");
 
+DEFINE_bool(
+    stirling_trace_static_tls_binaries, gflags::BoolFromEnv("PX_TRACE_STATIC_TLS_BINARIES", true),
+    "If true, stirling will tls trace binaries statically linked with OpenSSL or BoringSSL");
+
+DEFINE_bool(
+    stirling_debug_tls_sources, gflags::BoolFromEnv("PX_DEBUG_TLS_SOURCES", false),
+    "If true, stirling will add additional prometheus metrics regarding the traced tls sources");
+
+DEFINE_uint32(stirling_bpf_loop_limit, 41,
+              "The maximum number of iovecs to capture for syscalls. "
+              "Set conservatively for older kernels by default to keep the instruction count below "
+              "BPF's limit for version 4 kernels (4096 per probe).");
+
+DEFINE_uint32(stirling_bpf_chunk_limit, 4,
+              "The maximum number of chunks a perf_submit can support. "
+              "This applies to messages that are over MAX_MSG_SIZE.");
+
 OBJ_STRVIEW(socket_trace_bcc_script, socket_trace);
 
 namespace px {
 namespace stirling {
 
+using px::stirling::bpf_tools::WrappedBCCPerCPUArrayTable;
 using px::system::ProcPath;
 using px::system::ProcPidPath;
 using px::utils::ToJSONString;
@@ -163,8 +202,22 @@ constexpr size_t kMaxHTTPHeadersBytes = 8192;
 // Protobuf printer will limit strings to this length.
 constexpr size_t kMaxPBStringLen = 64;
 
+constexpr char openssl_mismatched_fds_metric[] = "openssl_trace_mismatched_fds";
+constexpr char openssl_mismatched_fds_help[] =
+    "Count of the times a syscall's fd was mismatched when detecting fds from an active user space "
+    "call";
+constexpr char openssl_tls_source_metric[] = "openssl_tls_source_debug";
+constexpr char openssl_tls_source_help[] =
+    "Records the number of times a protocol was traced along with additional debugging information";
+
 SocketTraceConnector::SocketTraceConnector(std::string_view source_name)
-    : SourceConnector(source_name, kTables), conn_stats_(&conn_trackers_mgr_), uprobe_mgr_(this) {
+    : BCCSourceConnector(source_name, kTables),
+      conn_stats_(&conn_trackers_mgr_),
+      openssl_trace_mismatched_fds_counter_family_(
+          BuildCounterFamily(openssl_mismatched_fds_metric, openssl_mismatched_fds_help)),
+      openssl_trace_tls_source_counter_family_(
+          BuildCounterFamily(openssl_tls_source_metric, openssl_tls_source_help)),
+      uprobe_mgr_(&this->BCC()) {
   proc_parser_ = std::make_unique<system::ProcParser>();
   InitProtocolTransferSpecs();
 }
@@ -222,11 +275,10 @@ void SocketTraceConnector::InitProtocolTransferSpecs() {
                                   kMuxTableNum,
                                   {kRoleClient, kRoleServer},
                                   TRANSFER_STREAM_PROTOCOL(mux)}},
-      // TODO(chengruizhe): Update Mongo after implementing protocol parsers.
-      {kProtocolMongo, TransferSpec{/* trace_mode */ px::stirling::TraceMode::Off,
-                                    /* table_num */ static_cast<uint32_t>(-1),
-                                    /* trace_roles */ {},
-                                    /* transfer_fn */ nullptr}},
+      {kProtocolMongo, TransferSpec{FLAGS_stirling_enable_mongodb_tracing,
+                                    kMongoDBTableNum,
+                                    {kRoleClient, kRoleServer},
+                                    TRANSFER_STREAM_PROTOCOL(mongodb)}},
       {kProtocolAMQP, TransferSpec{FLAGS_stirling_enable_amqp_tracing,
                                    kAMQPTableNum,
                                    {kRoleClient, kRoleServer},
@@ -251,49 +303,66 @@ void SocketTraceConnector::InitProtocolTransferSpecs() {
 }
 
 using ProbeType = bpf_tools::BPFProbeAttachType;
-const auto kProbeSpecs = MakeArray<bpf_tools::KProbeSpec>(
-    {{"connect", ProbeType::kEntry, "syscall__probe_entry_connect"},
-     {"connect", ProbeType::kReturn, "syscall__probe_ret_connect"},
-     {"accept", ProbeType::kEntry, "syscall__probe_entry_accept"},
-     {"accept", ProbeType::kReturn, "syscall__probe_ret_accept"},
-     {"accept4", ProbeType::kEntry, "syscall__probe_entry_accept4"},
-     {"accept4", ProbeType::kReturn, "syscall__probe_ret_accept4"},
-     {"write", ProbeType::kEntry, "syscall__probe_entry_write"},
-     {"write", ProbeType::kReturn, "syscall__probe_ret_write"},
-     {"writev", ProbeType::kEntry, "syscall__probe_entry_writev"},
-     {"writev", ProbeType::kReturn, "syscall__probe_ret_writev"},
-     {"send", ProbeType::kEntry, "syscall__probe_entry_send"},
-     {"send", ProbeType::kReturn, "syscall__probe_ret_send"},
-     {"sendto", ProbeType::kEntry, "syscall__probe_entry_sendto"},
-     {"sendto", ProbeType::kReturn, "syscall__probe_ret_sendto"},
-     {"sendmsg", ProbeType::kEntry, "syscall__probe_entry_sendmsg"},
-     {"sendmsg", ProbeType::kReturn, "syscall__probe_ret_sendmsg"},
-     {"sendmmsg", ProbeType::kEntry, "syscall__probe_entry_sendmmsg"},
-     {"sendmmsg", ProbeType::kReturn, "syscall__probe_ret_sendmmsg"},
-     {"sendfile", ProbeType::kEntry, "syscall__probe_entry_sendfile"},
-     {"sendfile", ProbeType::kReturn, "syscall__probe_ret_sendfile"},
-     {"sendfile64", ProbeType::kEntry, "syscall__probe_entry_sendfile"},
-     {"sendfile64", ProbeType::kReturn, "syscall__probe_ret_sendfile"},
-     {"read", ProbeType::kEntry, "syscall__probe_entry_read"},
-     {"read", ProbeType::kReturn, "syscall__probe_ret_read"},
-     {"readv", ProbeType::kEntry, "syscall__probe_entry_readv"},
-     {"readv", ProbeType::kReturn, "syscall__probe_ret_readv"},
-     {"recv", ProbeType::kEntry, "syscall__probe_entry_recv"},
-     {"recv", ProbeType::kReturn, "syscall__probe_ret_recv"},
-     {"recvfrom", ProbeType::kEntry, "syscall__probe_entry_recvfrom"},
-     {"recvfrom", ProbeType::kReturn, "syscall__probe_ret_recvfrom"},
-     {"recvmsg", ProbeType::kEntry, "syscall__probe_entry_recvmsg"},
-     {"recvmsg", ProbeType::kReturn, "syscall__probe_ret_recvmsg"},
-     {"recvmmsg", ProbeType::kEntry, "syscall__probe_entry_recvmmsg"},
-     {"recvmmsg", ProbeType::kReturn, "syscall__probe_ret_recvmmsg"},
-     {"close", ProbeType::kEntry, "syscall__probe_entry_close"},
-     {"close", ProbeType::kReturn, "syscall__probe_ret_close"},
-     {"mmap", ProbeType::kEntry, "syscall__probe_entry_mmap"},
-     {"sock_alloc", ProbeType::kReturn, "probe_ret_sock_alloc", /*is_syscall*/ false},
-     {"security_socket_sendmsg", ProbeType::kEntry, "probe_entry_security_socket_sendmsg",
-      /*is_syscall*/ false},
-     {"security_socket_recvmsg", ProbeType::kEntry, "probe_entry_security_socket_recvmsg",
-      /*is_syscall*/ false}});
+const auto kProbeSpecs = MakeArray<bpf_tools::KProbeSpec>({
+    {"connect", ProbeType::kEntry, "syscall__probe_entry_connect"},
+    {"connect", ProbeType::kReturn, "syscall__probe_ret_connect"},
+    {"accept", ProbeType::kEntry, "syscall__probe_entry_accept"},
+    {"accept", ProbeType::kReturn, "syscall__probe_ret_accept"},
+    {"accept4", ProbeType::kEntry, "syscall__probe_entry_accept4"},
+    {"accept4", ProbeType::kReturn, "syscall__probe_ret_accept4"},
+    {"write", ProbeType::kEntry, "syscall__probe_entry_write"},
+    {"write", ProbeType::kReturn, "syscall__probe_ret_write"},
+    {"writev", ProbeType::kEntry, "syscall__probe_entry_writev"},
+    {"writev", ProbeType::kReturn, "syscall__probe_ret_writev"},
+    {"send", ProbeType::kEntry, "syscall__probe_entry_send"},
+    {"send", ProbeType::kReturn, "syscall__probe_ret_send"},
+    {"sendto", ProbeType::kEntry, "syscall__probe_entry_sendto"},
+    {"sendto", ProbeType::kReturn, "syscall__probe_ret_sendto"},
+    {"sendmsg", ProbeType::kEntry, "syscall__probe_entry_sendmsg"},
+    {"sendmsg", ProbeType::kReturn, "syscall__probe_ret_sendmsg"},
+    {"sendmmsg", ProbeType::kEntry, "syscall__probe_entry_sendmmsg"},
+    {"sendmmsg", ProbeType::kReturn, "syscall__probe_ret_sendmmsg"},
+    {"sendfile", ProbeType::kEntry, "syscall__probe_entry_sendfile"},
+    {"sendfile", ProbeType::kReturn, "syscall__probe_ret_sendfile"},
+    {"sendfile64", ProbeType::kEntry, "syscall__probe_entry_sendfile"},
+    {"sendfile64", ProbeType::kReturn, "syscall__probe_ret_sendfile"},
+    {"read", ProbeType::kEntry, "syscall__probe_entry_read"},
+    {"read", ProbeType::kReturn, "syscall__probe_ret_read"},
+    {"readv", ProbeType::kEntry, "syscall__probe_entry_readv"},
+    {"readv", ProbeType::kReturn, "syscall__probe_ret_readv"},
+    {"recv", ProbeType::kEntry, "syscall__probe_entry_recv"},
+    {"recv", ProbeType::kReturn, "syscall__probe_ret_recv"},
+    {"recvfrom", ProbeType::kEntry, "syscall__probe_entry_recvfrom"},
+    {"recvfrom", ProbeType::kReturn, "syscall__probe_ret_recvfrom"},
+    {"recvmsg", ProbeType::kEntry, "syscall__probe_entry_recvmsg"},
+    {"recvmsg", ProbeType::kReturn, "syscall__probe_ret_recvmsg"},
+    {"recvmmsg", ProbeType::kEntry, "syscall__probe_entry_recvmmsg"},
+    {"recvmmsg", ProbeType::kReturn, "syscall__probe_ret_recvmmsg"},
+    {"close", ProbeType::kEntry, "syscall__probe_entry_close"},
+    {"close", ProbeType::kReturn, "syscall__probe_ret_close"},
+    {"mmap", ProbeType::kEntry, "syscall__probe_entry_mmap"},
+    {"sock_alloc", ProbeType::kReturn, "probe_ret_sock_alloc", /*is_syscall*/ false},
+    {"tcp_v4_connect", ProbeType::kEntry, "probe_entry_populate_active_connect_sock",
+     /*is_syscall*/ false},
+    {"tcp_v4_connect", ProbeType::kReturn, "probe_ret_populate_active_connect_sock",
+     /*is_syscall*/ false},
+    {"tcp_v6_connect", ProbeType::kEntry, "probe_entry_populate_active_connect_sock",
+     /*is_syscall*/ false},
+    {"tcp_v6_connect", ProbeType::kReturn, "probe_ret_populate_active_connect_sock",
+     /*is_syscall*/ false},
+    {"tcp_sendmsg", ProbeType::kEntry, "probe_entry_populate_active_connect_sock",
+     /*is_syscall*/ false},
+    {"tcp_sendmsg", ProbeType::kReturn, "probe_ret_populate_active_connect_sock",
+     /*is_syscall*/ false},
+    {"security_socket_sendmsg", ProbeType::kEntry, "probe_entry_socket_sendmsg",
+     /*is_syscall*/ false, /* is_optional */ false,
+     std::make_shared<bpf_tools::KProbeSpec>(bpf_tools::KProbeSpec{
+         "sock_sendmesg", ProbeType::kEntry, "probe_entry_socket_sendmsg", false, true})},
+    {"security_socket_recvmsg", ProbeType::kEntry, "probe_entry_socket_recvmsg",
+     /*is_syscall*/ false, /* is_optional */ false,
+     std::make_shared<bpf_tools::KProbeSpec>(bpf_tools::KProbeSpec{
+         "sock_recvmsg", ProbeType::kEntry, "probe_entry_socket_recvmsg", false, true})},
+});
 
 using bpf_tools::PerfBufferSizeCategory;
 
@@ -366,22 +435,22 @@ auto SocketTraceConnector::InitPerfBufferSpecs() {
 
   auto specs = MakeArray<bpf_tools::PerfBufferSpec>({
       // For data events. The order must be consistent with output tables.
-      {"socket_data_events", HandleDataEvent, HandleDataEventLoss, kTargetDataBufferSize,
+      {"socket_data_events", HandleDataEvent, HandleDataEventLoss, this, kTargetDataBufferSize,
        PerfBufferSizeCategory::kData},
       // For non-data events. Must not mix with the above perf buffers for data events.
-      {"socket_control_events", HandleControlEvent, HandleControlEventLoss,
+      {"socket_control_events", HandleControlEvent, HandleControlEventLoss, this,
        kTargetControlBufferSize, PerfBufferSizeCategory::kControl},
-      {"conn_stats_events", HandleConnStatsEvent, HandleConnStatsEventLoss,
+      {"conn_stats_events", HandleConnStatsEvent, HandleConnStatsEventLoss, this,
        kTargetControlBufferSize, PerfBufferSizeCategory::kControl},
-      {"mmap_events", HandleMMapEvent, HandleMMapEventLoss, kTargetControlBufferSize / 10,
+      {"mmap_events", HandleMMapEvent, HandleMMapEventLoss, this, kTargetControlBufferSize / 10,
        PerfBufferSizeCategory::kControl},
-      {"go_grpc_events", HandleHTTP2Event, HandleHTTP2EventLoss, kTargetDataBufferSize,
+      {"go_grpc_events", HandleHTTP2Event, HandleHTTP2EventLoss, this, kTargetDataBufferSize,
        PerfBufferSizeCategory::kData},
-      {"grpc_c_events", HandleGrpcCEvent, HandleGrpcCDataLoss, kTargetDataBufferSize,
+      {"grpc_c_events", HandleGrpcCEvent, HandleGrpcCDataLoss, this, kTargetDataBufferSize,
        PerfBufferSizeCategory::kData},
-      {"grpc_c_header_events", HandleGrpcCHeaderEvent, HandleGrpcCHeaderDataLoss,
+      {"grpc_c_header_events", HandleGrpcCHeaderEvent, HandleGrpcCHeaderDataLoss, this,
        kTargetDataBufferSize, PerfBufferSizeCategory::kData},
-      {"grpc_c_close_events", HandleGrpcCCloseEvent, HandleGrpcCCloseDataLoss,
+      {"grpc_c_close_events", HandleGrpcCCloseEvent, HandleGrpcCCloseDataLoss, this,
        kTargetDataBufferSize, PerfBufferSizeCategory::kData},
   });
   ResizePerfBufferSpecs(&specs, category_maximums);
@@ -389,8 +458,28 @@ auto SocketTraceConnector::InitPerfBufferSpecs() {
 }
 
 Status SocketTraceConnector::InitBPF() {
+  // set BPF loop limit and chunk limit based on kernel version
+  auto kernel = system::GetCachedKernelVersion();
+  auto loop_limit_is_default =
+      gflags::GetCommandLineFlagInfoOrDie("stirling_bpf_loop_limit").is_default;
+  auto chunk_limit_is_default =
+      gflags::GetCommandLineFlagInfoOrDie("stirling_bpf_chunk_limit").is_default;
+
+  // Do not automatically raise loop and chunk limits for non-default values.
+  if (loop_limit_is_default && chunk_limit_is_default &&
+      (kernel.version > 5 || (kernel.version == 5 && kernel.major_rev >= 1))) {
+    // Kernels >= 5.1 have higher BPF instruction limits (1 million for verifier).
+    // This enables a 21x increase to our loop and chunk limits
+    FLAGS_stirling_bpf_loop_limit = 882;
+    FLAGS_stirling_bpf_chunk_limit = 84;
+    LOG(INFO) << absl::Substitute(
+        "Kernel version greater than V5.1 detected ($0), raised loop limit to $1 and chunk limit "
+        "to $2",
+        kernel.ToString(), FLAGS_stirling_bpf_loop_limit, FLAGS_stirling_bpf_chunk_limit);
+  }
   // PROTOCOL_LIST: Requires update on new protocols.
   std::vector<std::string> defines = {
+      absl::StrCat("-DENABLE_TLS_DEBUG_SOURCES=", FLAGS_stirling_debug_tls_sources),
       absl::StrCat("-DENABLE_HTTP_TRACING=", protocol_transfer_specs_[kProtocolHTTP].enabled),
       absl::StrCat("-DENABLE_CQL_TRACING=", protocol_transfer_specs_[kProtocolCQL].enabled),
       absl::StrCat("-DENABLE_MUX_TRACING=", protocol_transfer_specs_[kProtocolMux].enabled),
@@ -401,17 +490,19 @@ Status SocketTraceConnector::InitBPF() {
       absl::StrCat("-DENABLE_REDIS_TRACING=", protocol_transfer_specs_[kProtocolRedis].enabled),
       absl::StrCat("-DENABLE_NATS_TRACING=", protocol_transfer_specs_[kProtocolNATS].enabled),
       absl::StrCat("-DENABLE_AMQP_TRACING=", protocol_transfer_specs_[kProtocolAMQP].enabled),
-      absl::StrCat("-DENABLE_MONGO_TRACING=", "true"),
+      absl::StrCat("-DENABLE_MONGO_TRACING=", protocol_transfer_specs_[kProtocolMongo].enabled),
+      absl::StrCat("-DBPF_LOOP_LIMIT=", FLAGS_stirling_bpf_loop_limit),
+      absl::StrCat("-DBPF_CHUNK_LIMIT=", FLAGS_stirling_bpf_chunk_limit),
   };
-  PL_RETURN_IF_ERROR(InitBPFProgram(socket_trace_bcc_script, defines));
+  PX_RETURN_IF_ERROR(bcc_->InitBPFProgram(socket_trace_bcc_script, defines));
 
-  PL_RETURN_IF_ERROR(AttachKProbes(kProbeSpecs));
+  PX_RETURN_IF_ERROR(bcc_->AttachKProbes(kProbeSpecs));
   LOG(INFO) << absl::Substitute("Number of kprobes deployed = $0", kProbeSpecs.size());
   LOG(INFO) << "Probes successfully deployed.";
 
-  const auto kPerfBufferSpecs = InitPerfBufferSpecs();
-  PL_RETURN_IF_ERROR(OpenPerfBuffers(kPerfBufferSpecs, this));
-  LOG(INFO) << absl::Substitute("Number of perf buffers opened = $0", kPerfBufferSpecs.size());
+  const auto perf_buffer_specs = InitPerfBufferSpecs();
+  PX_RETURN_IF_ERROR(bcc_->OpenPerfBuffers(perf_buffer_specs));
+  LOG(INFO) << absl::Substitute("Number of perf buffers opened = $0", perf_buffer_specs.size());
 
   // Set trace role to BPF probes.
   for (const auto& p : magic_enum::enum_values<traffic_protocol_t>()) {
@@ -420,13 +511,13 @@ Status SocketTraceConnector::InitBPF() {
       for (auto role : protocol_transfer_specs_[p].trace_roles) {
         role_mask |= role;
       }
-      PL_RETURN_IF_ERROR(UpdateBPFProtocolTraceRole(p, role_mask));
+      PX_RETURN_IF_ERROR(UpdateBPFProtocolTraceRole(p, role_mask));
     }
   }
 
-  PL_RETURN_IF_ERROR(TestOnlySetTargetPID());
+  PX_RETURN_IF_ERROR(TestOnlySetTargetPID());
   if (FLAGS_stirling_disable_self_tracing) {
-    PL_RETURN_IF_ERROR(DisableSelfTracing());
+    PX_RETURN_IF_ERROR(DisableSelfTracing());
   }
   if (!FLAGS_socket_trace_data_events_output_path.empty()) {
     SetupOutput(FLAGS_socket_trace_data_events_output_path);
@@ -462,7 +553,7 @@ Status SocketTraceConnector::InitImpl() {
         "timestamps in a way that matches how /proc/stat does it");
   }
 
-  PL_RETURN_IF_ERROR(InitBPF());
+  PX_RETURN_IF_ERROR(InitBPF());
 
   auto s = system::SocketInfoManager::Create(
       ProcPath(), system::kTCPEstablishedState | system::kTCPListeningState);
@@ -472,11 +563,16 @@ Status SocketTraceConnector::InitImpl() {
     socket_info_mgr_ = s.ConsumeValueOrDie();
   }
 
-  conn_info_map_mgr_ = std::make_shared<ConnInfoMapManager>(this);
+  conn_info_map_mgr_ = std::make_shared<ConnInfoMapManager>(bcc_.get());
   ConnTracker::SetConnInfoMapManager(conn_info_map_mgr_);
 
-  uprobe_mgr_.Init(protocol_transfer_specs_[kProtocolHTTP2].enabled,
+  uprobe_mgr_.Init(FLAGS_stirling_disable_golang_tls_tracing,
+                   protocol_transfer_specs_[kProtocolHTTP2].enabled,
                    FLAGS_stirling_disable_self_tracing);
+
+  openssl_trace_state_ = WrappedBCCArrayTable<int>::Create(bcc_.get(), "openssl_trace_state");
+  openssl_trace_state_debug_ = WrappedBCCMap<uint32_t, struct openssl_trace_state_debug_t>::Create(
+      bcc_.get(), "openssl_trace_state_debug");
 
   return Status::OK();
 }
@@ -502,7 +598,7 @@ Status SocketTraceConnector::StopImpl() {
   // Must call Close() after attach_uprobes_thread_ has joined,
   // otherwise the two threads will cause concurrent accesses to BCC,
   // that will cause races and undefined behavior.
-  Close();
+  bcc_->Close();
   return Status::OK();
 }
 
@@ -536,13 +632,15 @@ std::string DumpContext(ConnectorContext* ctx) {
 
 template <typename TBPFTableKey, typename TBPFTableVal>
 std::string BPFMapInfo(bpf_tools::BCCWrapper* bcc, std::string_view name) {
-  auto map = bcc->GetHashTable<TBPFTableKey, TBPFTableVal>(name.data());
-  size_t map_size = map.get_table_offline().size();
-  if (1.0 * map_size / map.capacity() > 0.9) {
+  auto map = WrappedBCCMap<TBPFTableKey, TBPFTableVal>::Create(bcc, name.data());
+
+  size_t map_size = map->GetTableOffline().size();
+  if (1.0 * map_size / map->capacity() > 0.9) {
     LOG(WARNING) << absl::Substitute("BPF Table $0 is nearly at capacity [size=$0 capacity=$1]",
-                                     map_size, map.capacity());
+                                     map_size, map->capacity());
   }
-  return absl::Substitute("\nBPFTable=$0 occupancy=$1 capacity=$2", name, map_size, map.capacity());
+  return absl::Substitute("\nBPFTable=$0 occupancy=$1 capacity=$2", name, map_size,
+                          map->capacity());
 }
 
 std::string BPFMapsInfo(bpf_tools::BCCWrapper* bcc) {
@@ -580,7 +678,7 @@ void SocketTraceConnector::UpdateCommonState(ConnectorContext* ctx) {
   // so raw data will be pushed to connection trackers more aggressively.
   // No data is lost, but this is a side-effect of sorts that affects timing of transfers.
   // It may be worth noting during debug.
-  PollPerfBuffers();
+  bcc_->PollPerfBuffers();
 
   // Set-up current state for connection inference purposes.
   if (socket_info_mgr_ != nullptr) {
@@ -615,7 +713,72 @@ void SocketTraceConnector::UpdateTrackerTraceLevel(ConnTracker* tracker) {
   if (pids_to_trace_disable_.contains(tracker->conn_id().upid.pid)) {
     tracker->SetDebugTrace(0);
   }
+  // Debugging Server side tracing is difficult when the server side services requests pre fork
+  // (certain web servers, postgres, etc). This provides a means for enabling CONN_TRACE for
+  // all processes since these situations are impossible to debug via --stirling_conn_trace_pid.
+  if (debug_level_ >= 2) {
+    tracker->SetDebugTrace(2);
+  }
 }
+
+// Verifies that our openssl tracing does not encounter conditions that invalidate our
+// assumptions and records error conditions in prometheus metrics.
+void SocketTraceConnector::CheckTracerState() {
+  // The check that state is not uninitialized is required for socket_trace_connector_test.
+  // Since it doesn't initialize the BPF program, accessing the map will fail.
+  if (state() == State::kUninitialized) {
+    return;
+  }
+
+  const int error_code =
+      openssl_trace_state_->GetValue(kOpenSSLTraceStatusIdx).ConsumeValueOr(kOpenSSLTraceOk);
+  const bool mismatched_fds = error_code == kOpenSSLMismatchedFDsDetected;
+
+  if (FLAGS_stirling_debug_tls_sources || mismatched_fds) {
+    if (mismatched_fds) {
+      openssl_trace_mismatched_fds_counter_family_.Add({{"name", openssl_mismatched_fds_metric}})
+          .Increment();
+    }
+
+    // Record the offending applications and clear the BPF hash in the process.
+    auto table = openssl_trace_state_debug_->GetTableOffline(true);
+    for (auto& entry : table) {
+      struct openssl_trace_state_debug_t debug = std::get<1>(entry);
+      auto ssl_source = std::string(magic_enum::enum_name(debug.ssl_source));
+      auto is_mismatched_entry = debug.mismatched_fd;
+
+      if (is_mismatched_entry) {
+        openssl_trace_mismatched_fds_counter_family_
+            .Add({{"name", openssl_mismatched_fds_metric},
+                  {"exe", debug.comm},
+                  {"ssl_source", ssl_source}})
+            .Increment();
+      }
+
+      if (FLAGS_stirling_debug_tls_sources) {
+        auto protocol = std::string(magic_enum::enum_name(debug.protocol));
+        openssl_trace_tls_source_counter_family_
+            .Add({
+                {"name", openssl_tls_source_metric},
+                {"exe", debug.comm},
+                {"ssl_source", ssl_source},
+                {"protocol", protocol},
+            })
+            .Increment();
+      }
+    }
+  }
+  DCHECK_EQ(error_code, kOpenSSLTraceOk);
+
+  // Reset the BPF map to its default value so that each occurrence
+  // can be detected.
+  if (error_code != kOpenSSLTraceOk) {
+    PX_UNUSED(openssl_trace_state_->SetValue(kOpenSSLTraceStatusIdx, kOpenSSLTraceOk));
+  }
+}
+
+using stream_id_t = protocols::http::stream_id_t;
+using message_t = protocols::http::Message;
 
 void SocketTraceConnector::TransferDataImpl(ConnectorContext* ctx) {
   set_iteration_time(now_fn_());
@@ -638,7 +801,7 @@ void SocketTraceConnector::TransferDataImpl(ConnectorContext* ctx) {
   if (sampling_freq_mgr_.count() % (kDebugDumpPeriod / kSamplingPeriod) == 0) {
     if (debug_level_ >= 1) {
       LOG(INFO) << "Context: " << DumpContext(ctx);
-      LOG(INFO) << "BPF map info: " << BPFMapsInfo(static_cast<BCCWrapper*>(this));
+      LOG(INFO) << "BPF map info: " << BPFMapsInfo(bcc_.get());
     }
   }
 
@@ -682,13 +845,15 @@ void SocketTraceConnector::TransferDataImpl(ConnectorContext* ctx) {
     } else {
       // If there's no transfer function, then the tracker should not be holding any data.
       // http::ProtocolTraits is used as a placeholder; the frames deque is expected to be
-      // std::monotstate.
-      ECHECK(conn_tracker->send_data().Empty<protocols::http::Message>());
-      ECHECK(conn_tracker->recv_data().Empty<protocols::http::Message>());
+      // std::monostate.
+      DCHECK((conn_tracker->send_data().Empty<stream_id_t, message_t>()));
+      DCHECK((conn_tracker->recv_data().Empty<stream_id_t, message_t>()));
     }
 
     conn_tracker->IterationPostTick();
   }
+
+  CheckTracerState();
 
   // Once we've cleared all the debug trace levels for this pid, we can remove it from the list.
   pids_to_trace_disable_.clear();
@@ -696,9 +861,8 @@ void SocketTraceConnector::TransferDataImpl(ConnectorContext* ctx) {
 
 Status SocketTraceConnector::UpdateBPFProtocolTraceRole(traffic_protocol_t protocol,
                                                         uint64_t role_mask) {
-  auto control_map_handle = GetPerCPUArrayTable<uint64_t>(kControlMapName);
-  return bpf_tools::UpdatePerCPUArrayValue(static_cast<int>(protocol), role_mask,
-                                           &control_map_handle);
+  auto control_map = WrappedBCCPerCPUArrayTable<uint64_t>::Create(bcc_.get(), kControlMapName);
+  return control_map->SetValues(static_cast<int>(protocol), role_mask);
 }
 
 Status SocketTraceConnector::TestOnlySetTargetPID() {
@@ -712,14 +876,16 @@ Status SocketTraceConnector::TestOnlySetTargetPID() {
         "Enable CONN_TRACE for pid=$0 following --test_only_socket_trace_target_pid", pid);
     FLAGS_stirling_conn_trace_pid = pid;
   }
-  auto control_map_handle = GetPerCPUArrayTable<int64_t>(kControlValuesArrayName);
-  return bpf_tools::UpdatePerCPUArrayValue(kTargetTGIDIndex, pid, &control_map_handle);
+  auto control_map =
+      WrappedBCCPerCPUArrayTable<int64_t>::Create(bcc_.get(), kControlValuesArrayName);
+  return control_map->SetValues(kTargetTGIDIndex, pid);
 }
 
 Status SocketTraceConnector::DisableSelfTracing() {
-  auto control_map_handle = GetPerCPUArrayTable<int64_t>(kControlValuesArrayName);
-  int64_t self_pid = getpid();
-  return bpf_tools::UpdatePerCPUArrayValue(kStirlingTGIDIndex, self_pid, &control_map_handle);
+  auto control_map =
+      WrappedBCCPerCPUArrayTable<int64_t>::Create(bcc_.get(), kControlValuesArrayName);
+  const int64_t self_pid = getpid();
+  return control_map->SetValues(kStirlingTGIDIndex, self_pid);
 }
 
 //-----------------------------------------------------------------------------
@@ -1118,7 +1284,8 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
 
   // Currently decompresses gzip content, but could handle other transformations too.
   // Note that we do this after filtering to avoid burning CPU cycles unnecessarily.
-  protocols::http::PreProcessMessage(&resp_message);
+  protocols::http::PreProcessRespMessage(&resp_message);
+  protocols::http::PreProcessReqMessage(&req_message);
 
   md::UPID upid(ctx->GetASID(), conn_tracker.conn_id().upid.pid,
                 conn_tracker.conn_id().upid.start_time_ticks);
@@ -1135,7 +1302,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   // But std::move is not allowed because we re-use conn object.
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("major_version")>(1);
   r.Append<r.ColIndex("minor_version")>(resp_message.minor_version);
   r.Append<r.ColIndex("content_type")>(static_cast<uint64_t>(content_type));
@@ -1197,7 +1367,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("major_version")>(2);
   // HTTP2 does not define minor version.
   r.Append<r.ColIndex("minor_version")>(0);
@@ -1238,7 +1411,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req_cmd")>(static_cast<uint64_t>(entry.req.cmd));
   r.Append<r.ColIndex("req_body")>(std::move(entry.req.msg), FLAGS_max_body_bytes);
   r.Append<r.ColIndex("resp_status")>(static_cast<uint64_t>(entry.resp.status));
@@ -1261,7 +1437,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req_op")>(static_cast<uint64_t>(entry.req.op));
   r.Append<r.ColIndex("req_body")>(std::move(entry.req.msg), FLAGS_max_body_bytes);
   r.Append<r.ColIndex("resp_op")>(static_cast<uint64_t>(entry.resp.op));
@@ -1284,7 +1463,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req_header")>(entry.req.header);
   r.Append<r.ColIndex("req_body")>(entry.req.query);
   r.Append<r.ColIndex("resp_header")>(entry.resp.header);
@@ -1307,7 +1489,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req")>(std::move(entry.req.payload));
   r.Append<r.ColIndex("resp")>(std::move(entry.resp.payload));
   r.Append<r.ColIndex("latency")>(
@@ -1329,7 +1514,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req_type")>(entry.req.type);
   r.Append<r.ColIndex("latency")>(
       CalculateLatency(entry.req.timestamp_ns, entry.resp.timestamp_ns));
@@ -1350,7 +1538,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(conn_tracker.role());
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
 
   size_t frame_type = std::max(entry.req.frame_type, entry.resp.frame_type);
   r.Append<r.ColIndex("frame_type")>(frame_type);
@@ -1401,7 +1592,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(role);
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req_cmd")>(std::string(entry.req.command));
   r.Append<r.ColIndex("req_args")>(std::string(entry.req.payload));
   r.Append<r.ColIndex("resp")>(std::string(entry.resp.payload));
@@ -1424,7 +1618,10 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(role);
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("cmd")>(record.req.command);
   r.Append<r.ColIndex("body")>(record.req.options);
   r.Append<r.ColIndex("resp")>(record.resp.command);
@@ -1447,11 +1644,41 @@ void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracke
   r.Append<r.ColIndex("upid")>(upid.value());
   r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
   r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
   r.Append<r.ColIndex("trace_role")>(role);
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
   r.Append<r.ColIndex("req_cmd")>(static_cast<int64_t>(record.req.api_key));
   r.Append<r.ColIndex("client_id")>(std::move(record.req.client_id), FLAGS_max_body_bytes);
   r.Append<r.ColIndex("req_body")>(std::move(record.req.msg), kMaxKafkaBodyBytes);
   r.Append<r.ColIndex("resp")>(std::move(record.resp.msg), kMaxKafkaBodyBytes);
+  r.Append<r.ColIndex("latency")>(
+      CalculateLatency(record.req.timestamp_ns, record.resp.timestamp_ns));
+#ifndef NDEBUG
+  r.Append<r.ColIndex("px_info_")>(PXInfoString(conn_tracker, record));
+#endif
+}
+
+template <>
+void SocketTraceConnector::AppendMessage(ConnectorContext* ctx, const ConnTracker& conn_tracker,
+                                         protocols::mongodb::Record record, DataTable* data_table) {
+  md::UPID upid(ctx->GetASID(), conn_tracker.conn_id().upid.pid,
+                conn_tracker.conn_id().upid.start_time_ticks);
+
+  endpoint_role_t role = conn_tracker.role();
+  DataTable::RecordBuilder<&kMongoDBTable> r(data_table, record.resp.timestamp_ns);
+  r.Append<r.ColIndex("time_")>(record.req.timestamp_ns);
+  r.Append<r.ColIndex("upid")>(upid.value());
+  r.Append<r.ColIndex("remote_addr")>(conn_tracker.remote_endpoint().AddrStr());
+  r.Append<r.ColIndex("remote_port")>(conn_tracker.remote_endpoint().port());
+  r.Append<r.ColIndex("local_addr")>(conn_tracker.local_endpoint().AddrStr());
+  r.Append<r.ColIndex("local_port")>(conn_tracker.local_endpoint().port());
+  r.Append<r.ColIndex("trace_role")>(role);
+  r.Append<r.ColIndex("encrypted")>(conn_tracker.ssl());
+  r.Append<r.ColIndex("req_cmd")>(std::move(record.req.op_msg_type));
+  r.Append<r.ColIndex("req_body")>(std::move(record.req.frame_body));
+  r.Append<r.ColIndex("resp_status")>(std::move(record.resp.op_msg_type));
+  r.Append<r.ColIndex("resp_body")>(std::move(record.resp.frame_body));
   r.Append<r.ColIndex("latency")>(
       CalculateLatency(record.req.timestamp_ns, record.resp.timestamp_ns));
 #ifndef NDEBUG
@@ -1522,12 +1749,13 @@ template <typename TProtocolTraits>
 void SocketTraceConnector::TransferStream(ConnectorContext* ctx, ConnTracker* tracker,
                                           DataTable* data_table) {
   using TFrameType = typename TProtocolTraits::frame_type;
+  using TKey = typename TProtocolTraits::key_type;
 
   VLOG(3) << absl::StrCat("Connection\n", DebugString<TProtocolTraits>(*tracker, ""));
 
   // Make sure the tracker's frames containers have been properly initialized.
   // This is a nop if the containers are already of the right type.
-  tracker->InitFrames<TFrameType>();
+  tracker->InitFrames<TKey, TFrameType>();
 
   if (data_table != nullptr && tracker->state() == ConnTracker::State::kTransferring) {
     // ProcessToRecords() parses raw events and produces messages in format that are expected by
@@ -1581,6 +1809,9 @@ void SocketTraceConnector::TransferConnStats(ConnectorContext* ctx, DataTable* d
       r.Append<idx::kUPID>(upid.value());
       r.Append<idx::kRemoteAddr>(key.remote_addr);
       r.Append<idx::kRemotePort>(key.remote_port);
+      // TODO(@benkilimnik: uncomment when we have local addr/port in the key)
+      // r.Append<idx::kLocalAddr>(key.local_addr);
+      // r.Append<idx::kLocalPort>(key.local_port);
       r.Append<idx::kAddrFamily>(static_cast<int>(stats.addr_family));
       r.Append<idx::kProtocol>(stats.protocol);
       r.Append<idx::kRole>(stats.role);

@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//bazel:pl_build_system.bzl", "pl_go_binary", "pl_go_image")
 
@@ -27,6 +26,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//src/cloud/artifact_tracker/artifacttrackerpb:artifact_tracker_pl_go_proto",
+        "//src/cloud/shared/messages",
         "//src/cloud/shared/pgmigrate",
         "//src/cloud/shared/vzshard",
         "//src/cloud/vzmgr/controllers",
@@ -43,11 +43,10 @@ go_library(
         "//src/shared/services/server",
         "@com_github_golang_migrate_migrate//source/go_bindata",
         "@com_github_nats_io_nats_go//:nats_go",
-        "@com_github_prometheus_client_golang//prometheus",
         "@com_github_sirupsen_logrus//:logrus",
         "@com_github_spf13_pflag//:pflag",
         "@com_github_spf13_viper//:viper",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 
@@ -64,13 +63,4 @@ pl_go_image(
         "//k8s:__subpackages__",
         "//src/cloud:__subpackages__",
     ],
-)
-
-container_push(
-    name = "push_vzmgr_server_image",
-    format = "Docker",
-    image = ":vzmgr_server_image",
-    registry = "gcr.io",
-    repository = "pixie-oss/pixie-dev/cloud/vzmgr_server_image",
-    tag = "{STABLE_BUILD_TAG}",
 )

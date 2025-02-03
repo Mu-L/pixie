@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -111,6 +112,9 @@ inline StatusOr<Type> GetMatchingRespType(Type req_type) {
  * ----------------------------------------------
  *
  * Rdispatch / Tdispatch (Tdispatch does not have reply status)
+ *
+ * reply status is one of ok (0), error (1) or nack (2)
+ * https://github.com/twitter/finagle/blob/2e4d56d93a2bdfb63e293d84727d5266d2969f01/finagle-mux/src/main/scala/com/twitter/finagle/mux/transport/Message.scala#L549-L552
  * ----------------------------------------------
  * | uint32 header size | int8 type | int24 tag |
  * ----------------------------------------------
@@ -146,7 +150,7 @@ struct Frame : public FrameBase {
 
   void InsertContext(std::string_view ctx_key,
                      absl::flat_hash_map<std::string, std::string> value) {
-    DCHECK(context_.find(ctx_key) == context_.end());
+    CTX_DCHECK(context_.find(ctx_key) == context_.end());
 
     context_size_ += ctx_key.size();
     for (const auto& [k, v] : value) {
@@ -193,11 +197,13 @@ struct Record {
   }
 };
 
+using stream_id_t = uint16_t;
 struct ProtocolTraits : public BaseProtocolTraits<Record> {
   using frame_type = Frame;
   using record_type = Record;
   // TODO(ddelnano): mux does have state but assume no state for now
   using state_type = NoState;
+  using key_type = stream_id_t;
 };
 
 }  // namespace mux

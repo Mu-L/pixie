@@ -14,4 +14,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-include_recipe 'px_dev::base'
+include_recipe 'px_dev::linux'
+include_recipe 'px_dev::setup'
+include_recipe 'px_dev::linters'
+
+template '/opt/px_dev/pxenv.inc' do
+  source 'pxenv.inc.erb'
+  owner node['owner']
+  group node['group']
+  mode '0644'
+  action :create
+end
+
+common_remote_bin 'codecov'

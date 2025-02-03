@@ -14,13 +14,13 @@ spec:
         monitoring.gke.io/scrape: 'true'
       annotations:
         prometheus.io/scrape: 'true'
-        prometheus.io/port: '51600'
-        prometheus.io/scheme: 'https'
+        prometheus.io/port: '51601'
+        prometheus.io/scheme: 'http'
     spec:
       containers:
       - name: vzconn-server
         imagePullPolicy: IfNotPresent
-        image: gcr.io/pixie-oss/pixie-dev/cloud/vzconn_server_image
+        image: cloud-vzconn_server_image
         ports:
         - containerPort: 51600
           name: http2
@@ -78,6 +78,20 @@ spec:
           mountPath: /certs
         - name: proxycerts
           mountPath: /proxycerts
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10100
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10100
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
       - name: certs
         secret:
